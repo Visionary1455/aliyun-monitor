@@ -91,7 +91,7 @@ def main():
             client = AcsClient(user['ak'].strip(), user['sk'].strip(), target_region)
             
             # 1. CDT 流量
-            traffic_data = do_common_request(client, 'cdt.aliyuncs.com', '2021-08-13', 'ListCdtInternetTraffic')
+            traffic_data = do_common_request(AcsClient(user['ak'].strip(), user['sk'].strip(), 'cn-hangzhou'), 'cdt.aliyuncs.com', '2021-08-13', 'ListCdtInternetTraffic')
             traffic_gb = -1  # -1 表示查询失败
             if traffic_data:
                 traffic_gb = sum(d.get('Traffic', 0) for d in traffic_data.get('TrafficDetails', [])) / (1024**3)
@@ -115,7 +115,8 @@ def main():
             # 尝试2: 回退到 QueryBillOverview (国际站兼容)
             if bill_amount == -1:
                 bill_params2 = {'BillingCycle': datetime.datetime.now().strftime("%Y-%m")}
-                bill_data2 = do_common_request(client, 'business.ap-southeast-1.aliyuncs.com', '2017-12-14', 'QueryBillOverview', bill_params2)
+                bill_endpoint = user.get('bill_endpoint', 'business.ap-southeast-1.aliyuncs.com')
+                bill_data2 = do_common_request(client, bill_endpoint, '2017-12-14', 'QueryBillOverview', bill_params2)
                 if bill_data2:
                     items2 = bill_data2.get('Data', {}).get('Items', {}).get('Item', [])
                     bill_amount = sum(float(item.get('PretaxAmount', 0)) for item in items2)
@@ -165,6 +166,10 @@ def main():
             if bill_amount != -1 and bill_currency == 'CNY':
                 bill_str = f"¥{bill_amount:.2f}"
                 bill_limit = bill_limit * 7.0  # USD 阈值换算为 CNY
+            elif bill_amount != -1:
+                # 覆盖货币符号（支持根据配置动态显示）
+                currency_symbol = user.get('currency', '$')
+                bill_str = f"{currency_symbol}{bill_amount:.2f}"
 
             status_icon = "✅"
             if traffic_gb >= 0 and traffic_gb > quota: status_icon = "⚠️ 流量超标"

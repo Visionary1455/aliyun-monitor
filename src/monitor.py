@@ -145,7 +145,9 @@ def check_and_act(user, tg_conf, state):
         req_traffic.set_method('POST')
         req_traffic.set_connect_timeout(5000)   # 连接 5 秒内必须成功，避免黑洞 IP 卡死
         req_traffic.set_read_timeout(15000)      # 读取 15 秒
-        resp_traffic = client.do_action_with_exception(req_traffic)
+        # CDT 流量查询强制使用 cn-hangzhou client 避免某些地域导致卡死
+        cdt_client = AcsClient(user['ak'], user['sk'], 'cn-hangzhou')
+        resp_traffic = cdt_client.do_action_with_exception(req_traffic)
         data_traffic = json.loads(resp_traffic.decode('utf-8'))
         total_bytes = sum(d.get('Traffic', 0) for d in data_traffic.get('TrafficDetails', []))
         curr_gb = total_bytes / (1024 ** 3)
