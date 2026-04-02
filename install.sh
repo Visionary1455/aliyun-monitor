@@ -10,9 +10,15 @@ NC='\033[0m'
 
 # GitHub 仓库 raw 地址
 REPO_URL="https://raw.githubusercontent.com/10000ge10000/aliyun_monitor/main/src"
+TARGET_DIR="/opt/scripts"
+VENV_DIR="${TARGET_DIR}/venv"
+CONFIG_FILE="${TARGET_DIR}/config.json"
+
+# 全局变量，用于在函数间传递生成的 JSON 数据
+CURRENT_USER_JSON=""
 
 echo -e "${BLUE}=============================================================${NC}"
-echo -e "${BLUE}       阿里云 CDT 流量监控 & 日报 一键部署脚本 (交互版)      ${NC}"
+echo -e "${BLUE}     阿里云 CDT 流量监控 & 日报 一键部署/管理脚本 (交互版)   ${NC}"
 echo -e "${BLUE}=============================================================${NC}"
 
 if [ "$EUID" -ne 0 ]; then
@@ -20,74 +26,19 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# 1. 目录准备
-TARGET_DIR="/opt/scripts"
-if [ ! -d "$TARGET_DIR" ]; then
-    mkdir -p "$TARGET_DIR"
-    echo -e "${GREEN}创建目录: ${TARGET_DIR}${NC}"
-fi
+# ================= 核心功能函数 =================
 
-# 2. 安装依赖
-echo -e "${YELLOW}>> 安装系统依赖...${NC}"
-if [ -f /etc/debian_version ]; then
-    apt-get update -y && apt-get install -y python3 python3-venv python3-pip cron wget
-elif [ -f /etc/redhat-release ]; then
-    yum install -y python3 python3-pip cronie wget
-    systemctl enable crond && systemctl start crond
-fi
+# 收集单个用户信息的函数 (修复了屏幕输出被吞的问题)
+function get_single_user_json() {
+    local AK="" SK="" REGION="" RESGROUP="" INSTANCE="" NAME="" LIMIT=""
 
-# 3. 虚拟环境
-VENV_DIR="${TARGET_DIR}/venv"
-if [ ! -d "$VENV_DIR" ]; then
-    python3 -m venv "$VENV_DIR"
-    echo -e "${GREEN}虚拟环境创建完成。${NC}"
-fi
-
-echo -e "${YELLOW}>> 安装 Python 依赖库...${NC}"
-"$VENV_DIR/bin/pip" install requests aliyun-python-sdk-core aliyun-python-sdk-ecs aliyun-python-sdk-bssopenapi --upgrade >/dev/null 2>&1
-
-# 4. 下载源码
-echo -e "${YELLOW}>> 从 GitHub 下载最新脚本...${NC}"
-wget -O "${TARGET_DIR}/monitor.py" "${REPO_URL}/monitor.py"
-wget -O "${TARGET_DIR}/report.py" "${REPO_URL}/report.py"
-
-if [ ! -s "${TARGET_DIR}/monitor.py" ]; then
-    echo -e "${RED}下载失败！请检查网络或 GitHub 地址是否正确。${NC}"
-    exit 1
-fi
-
-# 5. 交互式配置
-echo -e "\n${BLUE}### 配置 Telegram ###${NC}"
-echo -e "1. 联系 ${CYAN}@BotFather${NC} -> 创建机器人获取 Token"
-echo -e "2. 联系 ${CYAN}@userinfobot${NC} -> 获取您的 Chat ID"
-read -p "请输入 Telegram Bot Token: " TG_TOKEN
-read -p "请输入 Telegram Chat ID: " TG_ID
-
-echo -e "\n${BLUE}### 配置阿里云 RAM ###${NC}"
-echo -e "请前往阿里云 RAM 控制台创建用户："
-echo -e "🔗 地址: ${YELLOW}https://ram.console.alibabacloud.com/users${NC}"
-echo -e "⚠️  权限要求: AliyunECSFullAccess, AliyunCDTFullAccess, AliyunBSSReadOnlyAccess"
-
-USERS_JSON=""
-
-while true; do
-    AK=""
-    SK=""
-    REGION=""
-    RESGROUP=""
-    INSTANCE=""
-    
-    echo -e "\n${BLUE}>> 添加一个阿里云账号${NC}"
-    
-    # 备注名
+    echo -e "\n${BLUE}>> 配置阿里云账号/实例信息${NC}"
     read -p "请输入备注名 (例如 HK-Server): " NAME
     
-    # AK/SK 指引
     echo -e "${CYAN}💡 提示: AccessKey 在 RAM 用户详情页 -> 创建 AccessKey${NC}"
     read -p "AccessKey ID: " AK
     read -p "AccessKey Secret: " SK
     
-    # Region 菜单选择
     echo -e "${CYAN}💡 提示: 请选择 ECS 实例所在的区域 (输入数字)${NC}"
     echo "  1) 香港 (cn-hongkong)"
     echo "  2) 新加坡 (ap-southeast-1)"
@@ -110,36 +61,83 @@ while true; do
         *) read -p "请输入 Region ID (如 cn-shanghai): " REGION ;;
     esac
 
-    # 资源组 ID（可选，用于 RAM 权限收敛）
     echo -e "${CYAN}💡 提示: 如 RAM 用户授权到资源组，请输入资源组 ID，否则直接回车跳过${NC}"
     read -p "资源组 ID (可选): " RESGROUP
 
-    # 实例 ID 指引
     echo -e "${CYAN}💡 提示: 请前往 ECS 控制台 -> 实例列表 -> 实例 ID 列 (以 i- 开头)${NC}"
     read -p "ECS 实例 ID: " INSTANCE
     
-    # 阈值
     read -p "关机阈值 (GB, 默认180): " LIMIT
     LIMIT=${LIMIT:-180}
 
-    # 构建 JSON 对象
-    USER_OBJ="{\"name\": \"$NAME\", \"ak\": \"$AK\", \"sk\": \"$SK\", \"region\": \"$REGION\", \"resgroup\": \"$RESGROUP\", \"instance_id\": \"$INSTANCE\", \"traffic_limit\": $LIMIT, \"quota\": 200}"
-    
-    if [ -z "$USERS_JSON" ]; then
-        USERS_JSON="$USER_OBJ"
-    else
-        USERS_JSON="$USERS_JSON, $USER_OBJ"
+    # 将构建好的 JSON 字符串赋值给全局变量
+    CURRENT_USER_JSON="{\"name\": \"$NAME\", \"ak\": \"$AK\", \"sk\": \"$SK\", \"region\": \"$REGION\", \"resgroup\": \"$RESGROUP\", \"instance_id\": \"$INSTANCE\", \"traffic_limit\": $LIMIT, \"quota\": 200}"
+}
+
+# 完整安装流程 (首次运行)
+function run_full_install() {
+    # 1. 目录准备
+    if [ ! -d "$TARGET_DIR" ]; then
+        mkdir -p "$TARGET_DIR"
+        echo -e "${GREEN}创建目录: ${TARGET_DIR}${NC}"
     fi
 
-    echo ""
-    read -p "是否继续添加第二个账号? (y/n): " CONTIN
-    if [[ ! "$CONTIN" =~ ^[Yy]$ ]]; then
-        break
+    # 2. 安装依赖
+    echo -e "${YELLOW}>> 安装系统依赖...${NC}"
+    if [ -f /etc/debian_version ]; then
+        apt-get update -y && apt-get install -y python3 python3-venv python3-pip cron wget
+    elif [ -f /etc/redhat-release ]; then
+        yum install -y python3 python3-pip cronie wget
+        systemctl enable crond && systemctl start crond
     fi
-done
 
-# 6. 生成配置文件 (config.json)
-cat > "${TARGET_DIR}/config.json" <<EOF
+    # 3. 虚拟环境
+    if [ ! -d "$VENV_DIR" ]; then
+        python3 -m venv "$VENV_DIR"
+        echo -e "${GREEN}虚拟环境创建完成。${NC}"
+    fi
+
+    echo -e "${YELLOW}>> 安装 Python 依赖库...${NC}"
+    "$VENV_DIR/bin/pip" install requests aliyun-python-sdk-core aliyun-python-sdk-ecs aliyun-python-sdk-bssopenapi --upgrade >/dev/null 2>&1
+
+    # 4. 下载源码
+    echo -e "${YELLOW}>> 从 GitHub 下载最新脚本...${NC}"
+    wget -O "${TARGET_DIR}/monitor.py" "${REPO_URL}/monitor.py"
+    wget -O "${TARGET_DIR}/report.py" "${REPO_URL}/report.py"
+
+    if [ ! -s "${TARGET_DIR}/monitor.py" ]; then
+        echo -e "${RED}下载失败！请检查网络或 GitHub 地址是否正确。${NC}"
+        exit 1
+    fi
+
+    # 5. 交互式配置 Telegram
+    echo -e "\n${BLUE}### 配置 Telegram ###${NC}"
+    echo -e "1. 联系 ${CYAN}@BotFather${NC} -> 创建机器人获取 Token"
+    echo -e "2. 联系 ${CYAN}@userinfobot${NC} -> 获取您的 Chat ID"
+    read -p "请输入 Telegram Bot Token: " TG_TOKEN
+    read -p "请输入 Telegram Chat ID: " TG_ID
+
+    # 6. 配置阿里云对象
+    USERS_JSON=""
+    while true; do
+        # 调用函数，结果保存在 CURRENT_USER_JSON 中
+        get_single_user_json
+        
+        if [ -z "$USERS_JSON" ]; then
+            USERS_JSON="$CURRENT_USER_JSON"
+        else
+            USERS_JSON="$USERS_JSON, $CURRENT_USER_JSON"
+        fi
+
+        echo ""
+        read -p "是否继续添加第二个账号/实例? (y/n): " CONTIN
+        if [[ ! "$CONTIN" =~ ^[Yy]$ ]]; then
+            break
+        fi
+    done
+
+    # 7. 生成配置文件
+    cat > "$CONFIG_FILE" <<EOF
 {
     "telegram": {
         "bot_token": "$TG_TOKEN",
@@ -150,19 +148,107 @@ cat > "${TARGET_DIR}/config.json" <<EOF
     ]
 }
 EOF
-echo -e "${GREEN}配置文件已生成: ${TARGET_DIR}/config.json${NC}"
+    echo -e "${GREEN}配置文件已生成: ${CONFIG_FILE}${NC}"
 
-# 7. 设置 Crontab
-echo -e "${YELLOW}>> 配置定时任务...${NC}"
-crontab -l > /tmp/cron_bk 2>/dev/null
-grep -v "aliyun_monitor" /tmp/cron_bk > /tmp/cron_clean # 清理旧任务
+    # 8. 设置 Crontab
+    echo -e "${YELLOW}>> 配置定时任务...${NC}"
+    crontab -l > /tmp/cron_bk 2>/dev/null
+    grep -v "aliyun_monitor" /tmp/cron_bk > /tmp/cron_clean
+    echo "*/5 * * * * ${VENV_DIR}/bin/python ${TARGET_DIR}/monitor.py >> ${TARGET_DIR}/monitor.log 2>&1 #aliyun_monitor" >> /tmp/cron_clean
+    echo "0 9 * * * ${VENV_DIR}/bin/python ${TARGET_DIR}/report.py >> ${TARGET_DIR}/report.log 2>&1 #aliyun_monitor" >> /tmp/cron_clean
+    crontab /tmp/cron_clean
+    rm /tmp/cron_bk /tmp/cron_clean
 
-echo "*/5 * * * * ${VENV_DIR}/bin/python ${TARGET_DIR}/monitor.py >> ${TARGET_DIR}/monitor.log 2>&1 #aliyun_monitor" >> /tmp/cron_clean
-echo "0 9 * * * ${VENV_DIR}/bin/python ${TARGET_DIR}/report.py >> ${TARGET_DIR}/report.log 2>&1 #aliyun_monitor" >> /tmp/cron_clean
+    echo -e "\n${GREEN}🎉 安装与配置完成！${NC}"
+    echo -e "您可以使用以下命令手动测试日报发送："
+    echo -e "${YELLOW}${VENV_DIR}/bin/python ${TARGET_DIR}/report.py${NC}"
+}
 
-crontab /tmp/cron_clean
-rm /tmp/cron_bk /tmp/cron_clean
+# 管理菜单 (二次运行)
+function run_manage_menu() {
+    while true; do
+        echo -e "\n${GREEN}=====================================${NC}"
+        echo -e "${YELLOW}已检测到存在配置文件，请选择管理操作：${NC}"
+        echo "1) 添加新的监控实例 (Add)"
+        echo "2) 删除已有监控实例 (Delete)"
+        echo "3) 更新脚本并重置所有配置 (Update & Reset)"
+        echo "4) 退出脚本 (Exit)"
+        echo -e "${GREEN}=====================================${NC}"
+        read -p "请输入序号 (1-4): " MENU_OPT
 
-echo -e "\n${GREEN}🎉 安装完成！${NC}"
-echo -e "您可以使用以下命令手动测试日报发送："
-echo -e "${YELLOW}${VENV_DIR}/bin/python ${TARGET_DIR}/report.py${NC}"
+        case $MENU_OPT in
+            1)
+                # 调用函数，结果保存在 CURRENT_USER_JSON 中
+                get_single_user_json
+                # 使用 Python 追加 JSON 节点
+                python3 -c "
+import json
+with open('$CONFIG_FILE', 'r') as f:
+    data = json.load(f)
+data['users'].append(json.loads('''$CURRENT_USER_JSON'''))
+with open('$CONFIG_FILE', 'w') as f:
+    json.dump(data, f, indent=4)
+"
+                echo -e "${GREEN}✅ 实例添加成功！配置文件已更新。${NC}"
+                ;;
+            2)
+                echo -e "\n${BLUE}当前监控的实例列表：${NC}"
+                # 使用 Python 列出所有实例
+                python3 -c "
+import json
+with open('$CONFIG_FILE', 'r') as f:
+    users = json.load(f).get('users', [])
+if not users:
+    print('当前没有配置任何监控实例。')
+else:
+    for i, u in enumerate(users):
+        print(f' [{i}] 备注名: {u.get(\"name\")} | 实例ID: {u.get(\"instance_id\")} | 区域: {u.get(\"region\")}')
+"
+                echo ""
+                read -p "请输入要删除的实例序号 (输入 q 取消): " DEL_IDX
+                if [[ "$DEL_IDX" == "q" || -z "$DEL_IDX" ]]; then
+                    continue
+                fi
+                # 使用 Python 删除对应节点
+                python3 -c "
+import json, sys
+idx = int('$DEL_IDX')
+with open('$CONFIG_FILE', 'r') as f:
+    data = json.load(f)
+try:
+    removed = data['users'].pop(idx)
+    with open('$CONFIG_FILE', 'w') as f:
+        json.dump(data, f, indent=4)
+    print(f'\n\033[0;32m✅ 成功删除实例: {removed.get(\"name\")} ({removed.get(\"instance_id\")})\033[0m')
+except Exception as e:
+    print(f'\n\033[0;31m❌ 删除失败: 无效的序号 {idx}\033[0m')
+"
+                ;;
+            3)
+                echo -e "${RED}⚠️ 此操作将更新代码并覆盖现有的 config.json！${NC}"
+                read -p "确认要更新并重置配置吗？(y/n): " CONFIRM_REINSTALL
+                if [[ "$CONFIRM_REINSTALL" =~ ^[Yy]$ ]]; then
+                    run_full_install
+                    exit 0
+                fi
+                ;;
+            4)
+                echo -e "${GREEN}退出脚本。${NC}"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}输入无效，请重新选择。${NC}"
+                ;;
+        esac
+    done
+}
+
+# ================= 脚本入口 =================
+
+if [ -f "$CONFIG_FILE" ]; then
+    # 如果检测到 config.json 已存在，进入管理菜单
+    run_manage_menu
+else
+    # 首次安装
+    run_full_install
+fi
