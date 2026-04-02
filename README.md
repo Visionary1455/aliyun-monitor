@@ -13,10 +13,14 @@
 
 <div align="center">
   <a href="https://www.bilibili.com/video/BV1b2rfBnEZg/" target="_blank">
-    <img src="https://img.shields.io/badge/Bilibili-观看完整视频教程-FF8EB3?style=for-the-badge&logo=bilibili&logoColor=white" alt="Bilibili Video Tutorial"/>
+    <img width="650" src="https://images.weserv.nl/?url=i2.hdslb.com/bfs/archive/49eb886eab33d88e1cc88c2d3bd624d7eb703d32.jpg" alt="点击观看演示视频" />
+  </a>
+  <br><br>
+  <a href="https://www.bilibili.com/video/BV1b2rfBnEZg/" target="_blank">
+    <img src="https://img.shields.io/badge/Bilibili-点击上方封面或此处观看完整视频-FF8EB3?style=for-the-badge&logo=bilibili&logoColor=white" alt="Bilibili Video Tutorial"/>
   </a>
   <br>
-  <p><i>📺 点击上方徽章或者 <a href="https://www.bilibili.com/video/BV1b2rfBnEZg/">此链接</a> 观看作者提供的保姆级操作演示与避坑指南。</i></p>
+  <p><b>📺 超详尽保姆级从零操作演示与避坑防潮指南！</b></p>
 </div>
 
 ---
