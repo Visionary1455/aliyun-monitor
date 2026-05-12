@@ -10,6 +10,11 @@ if [ ! -f /bin/bash ]; then
     apk add bash iproute2 grep gawk ipcalc curl wget >/dev/null 2>&1
 fi
 
+# Ensure we are running in bash even when piped via sh
+if [ -z "${BASH_VERSION:-}" ]; then
+    exec /bin/bash "$0" "$@"
+fi
+
 set -e
 
 # --- 2. Root check ---
@@ -25,11 +30,15 @@ echo "Script will extract current IP config for static IP install."
 echo ""
 
 if [ -z "$PORT" ]; then
-    read -p "SSH Port [default 22]: " PORT
+    if [ -t 0 ] || [ -t 1 ]; then
+        read -r -p "SSH Port [default 22]: " PORT </dev/tty || true
+    fi
     PORT=${PORT:-22}
 fi
 if [ -z "$PASSWORD" ]; then
-    read -p "Root Password (NO special chars) [default yiwan123]: " PASSWORD
+    if [ -t 0 ] || [ -t 1 ]; then
+        read -r -p "Root Password (NO special chars) [default yiwan123]: " PASSWORD </dev/tty || true
+    fi
     PASSWORD=${PASSWORD:-yiwan123}
 fi
 
