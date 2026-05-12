@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 import sys
 import warnings
+import os
+import json
+import datetime
+import requests
 
 # 修正 urllib3 在 Python 3.12 下引发的 SNI 丢失问题
 try:
