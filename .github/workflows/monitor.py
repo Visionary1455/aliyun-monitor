@@ -6,6 +6,7 @@
 """
 
 import os
+import sys
 import json
 import time
 import logging
@@ -16,15 +17,20 @@ from aliyunsdkecs.request.v20140526.StartInstanceRequest import StartInstanceReq
 from aliyunsdkecs.request.v20140526.StopInstanceRequest import StopInstanceRequest
 from aliyunsdkecs.request.v20140526.DescribeInstancesRequest import DescribeInstancesRequest
 
+# 确保 UTF-8 编码
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
 
-# 状态文件路径 (GitHub Actions 使用临时目录)
-STATE_FILE = os.environ.get('STATE_FILE', '/tmp/monitor_state.json')
+# 状态文件路径 (使用 GitHub HOME 目录，跨 step 可保持)
+STATE_FILE = os.environ.get('STATE_FILE', os.path.expanduser('~/monitor_state.json'))
 
 # 冷却时间配置
 NOTIFY_COOLDOWN = 3600           # 普通事件 1 小时冷却
@@ -43,10 +49,14 @@ def load_config():
         'ALIYUN_REGION',
         'ECS_INSTANCE_ID',
     ]
+    missing = []
     for var in required:
         if not os.environ.get(var):
-            logger.error(f"缺少必需环境变量: {var}")
-            return None
+            missing.append(var)
+
+    if missing:
+        logger.error(f"缺少必需环境变量: {', '.join(missing)}")
+        return None
 
     return {
         'ak': os.environ.get('ALIYUN_ACCESS_KEY_ID'),
@@ -56,6 +66,7 @@ def load_config():
         'traffic_limit': int(os.environ.get('CDT_TRAFFIC_LIMIT_GB', '180')),
         'feishu_app_id': os.environ.get('FEISHU_APP_ID'),
         'feishu_app_secret': os.environ.get('FEISHU_APP_SECRET'),
+        'feishu_chat_id': os.environ.get('FEISHU_CHAT_ID'),
         'name': os.environ.get('INSTANCE_NAME', 'ECS-Monitor'),
     }
 
@@ -67,7 +78,7 @@ def get_feishu_access_token():
 
     if not app_id or not app_secret:
         logger.warning("飞书配置缺失，跳过通知")
-        return None
+        return None, None
 
     try:
         url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
@@ -77,80 +88,55 @@ def get_feishu_access_token():
         result = resp.json()
 
         if result.get("code") == 0:
-            return result.get("tenant_access_token")
+            logger.info("飞书 access_token 获取成功")
+            return result.get("tenant_access_token"), app_id
         else:
             logger.error(f"获取飞书token失败: {result}")
-            return None
+            return None, None
     except Exception as e:
         logger.error(f"获取飞书token异常: {e}")
-        return None
+        return None, None
 
 
 def send_feishu_message(title, message, color_status="green"):
     """发送飞书消息"""
-    access_token = get_feishu_access_token()
+    access_token, app_id = get_feishu_access_token()
     if not access_token:
+        logger.warning("无法获取飞书 access_token")
         return
-
-    # 颜色映射
-    colors = {
-        "green": "#00C471",
-        "red": "#F5222D",
-        "orange": "#FA8C16",
-    }
-    color = colors.get(color_status, "#00C471")
 
     icon = "✅" if color_status == "green" else "⚠️"
 
-    # 构建富文本消息
-    msg_content = {
-        "zh_cn": {
-            "title": f"{icon} {title}",
-            "content": [
-                [
-                    {"tag": "text", "text": f"实例: {os.environ.get('INSTANCE_NAME', 'ECS-Monitor')}\n"},
-                    {"tag": "text", "text": f"消息: {message}\n"},
-                    {"tag": "text", "text": f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}"}
-                ]
-            ]
-        }
-    }
-
     try:
-        # 获取接收者 ID (可选，这里发送给所有人)
-        # 如果需要发给特定用户，需要先获取 user_id
         url = "https://open.feishu.cn/open-apis/im/v1/messages"
-        params = {"receive_id_type": "chat_id"}
-        # 这里使用应用自身的能力发送消息 (需要配置应用权限)
-        # 简单版：使用 webhook 方式发送
+        params = {"receive_id_type": "app_id"}
 
-        # 备用方案：使用应用消息发送
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json; charset=utf-8"
         }
 
-        # 发送应用消息到群聊或用户
-        # 这里使用简化的文本消息发送
+        # 使用 app_id 发送给应用自身（应用创建的机器人可以在应用消息中查看）
         message_data = {
-            "receive_id": os.environ.get('FEISHU_CHAT_ID', ''),
+            "receive_id": app_id,
             "msg_type": "text",
             "content": json.dumps({"text": f"{icon} *{title}*\n\n{message}"})
         }
 
-        # 如果配置了chat_id，发送到群
-        if os.environ.get('FEISHU_CHAT_ID'):
-            resp = requests.post(url, params=params, headers=headers, json=message_data, timeout=10)
-            logger.info(f"飞书消息发送响应: {resp.text}")
+        resp = requests.post(url, params=params, headers=headers, json=message_data, timeout=10)
+        result = resp.json()
+
+        if result.get("code") == 0:
+            logger.info(f"飞书消息发送成功: {title}")
         else:
-            logger.info("未配置 FEISHU_CHAT_ID，跳过发送")
+            logger.warning(f"飞书消息��送���败: {result.get('msg', 'unknown error')}")
 
     except Exception as e:
-        logger.error(f"飞书消息发送失败: {e}")
+        logger.error(f"飞书消息发送异常: {e}")
 
 
 def send_feishu_alert(title, message, color_status="green"):
-    """发送飞书告警 (兼容旧接口)"""
+    """发送飞书告警"""
     send_feishu_message(title, message, color_status)
 
 # ---------- 状态缓存 ----------
@@ -168,8 +154,12 @@ def load_state():
 def save_state(state):
     """保存状态文件"""
     try:
+        state_dir = os.path.dirname(STATE_FILE)
+        if state_dir and not os.path.exists(state_dir):
+            os.makedirs(state_dir, exist_ok=True)
         with open(STATE_FILE, 'w', encoding='utf-8') as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
+        logger.info(f"状态已保存到: {STATE_FILE}")
     except Exception as e:
         logger.error(f"保存状态文件失败: {e}")
 
@@ -203,11 +193,30 @@ def get_instance_status(client, instance_id):
         return None
 
 
-def get_cdt_traffic(ak, sk):
+def get_cdt_traffic(ak, sk, region):
     """获取 CDT 流量使用量"""
+    # 根据区域选择 CDT 端点
+    # 国内区: cdt.aliyuncs.com
+    # 国际区: cdt.ap-southeast-1.aliyuncs.com 等
+
+    # 判断是否为国际区
+    international_regions = [
+        'cn-hongkong', 'ap-southeast-1', 'ap-southeast-2', 'ap-southeast-3',
+        'ap-northeast-1', 'us-west-1', 'us-east-1', 'eu-central-1',
+        'eu-west-1', 'me-east-1'
+    ]
+
+    if region in international_regions:
+        # 国际区使用对应的 CDT 端点
+        cdt_region = region
+    else:
+        # 国内区使用 cn-hangzhou
+        cdt_region = 'cn-hangzhou'
+
+    logger.info(f"使用 CDT 区域: {cdt_region}")
+
     try:
-        # 使用 cn-hangzhou 区域查询 CDT
-        client = AcsClient(ak, sk, 'cn-hangzhou')
+        client = AcsClient(ak, sk, cdt_region)
 
         req = CommonRequest()
         req.set_domain('cdt.aliyuncs.com')
@@ -220,7 +229,15 @@ def get_cdt_traffic(ak, sk):
         resp = client.do_action_with_exception(req)
         data = json.loads(resp.decode('utf-8'))
 
-        total_bytes = sum(d.get('Traffic', 0) for d in data.get('TrafficDetails', []))
+        logger.info(f"CDT API 返回: {json.dumps(data, ensure_ascii=False)[:200]}")
+
+        # 解析流量数据
+        traffic_details = data.get('TrafficDetails', [])
+        if not traffic_details:
+            logger.warning("CDT 流量详情为空，可能没有流量消耗")
+            return 0.0
+
+        total_bytes = sum(d.get('Traffic', 0) for d in traffic_details)
         return total_bytes / (1024 ** 3)  # 转换为 GB
     except Exception as e:
         logger.error(f"获取CDT流量失败: {e}")
@@ -236,7 +253,7 @@ def check_and_act(config, state):
     name = config['name']
     limit = config['traffic_limit']
 
-    # 创建阿里���客户端
+    # 创建阿里云客户端
     try:
         client = AcsClient(ak, sk, region)
     except Exception as e:
@@ -245,7 +262,7 @@ def check_and_act(config, state):
 
     # 1. 获取流量
     logger.info("查询 CDT 流量...")
-    curr_gb = get_cdt_traffic(ak, sk)
+    curr_gb = get_cdt_traffic(ak, sk, region)
     if curr_gb is None:
         logger.error("无法获取流量数据")
         if can_notify(state, instance_id, 'query_failed'):
@@ -258,6 +275,10 @@ def check_and_act(config, state):
     # 2. 获取实例状态
     status = get_instance_status(client, instance_id)
     logger.info(f"实例状态: {status}")
+
+    if status is None:
+        logger.error("无法获取实例状态")
+        return
 
     # 3. 决策逻辑
     if curr_gb < limit:
@@ -287,9 +308,9 @@ def check_and_act(config, state):
                         break
 
                 if started:
-                    logger.info("✅ 实例已启动")
+                    logger.info("实例已启动")
                     if can_notify(state, instance_id, 'resumed'):
-                        send_feishu_alert("实例已启动", f"流量: {curr_gb:.2f}GB\n状态: 运行中 ✅", "green")
+                        send_feishu_alert("实例已启动", f"流量: {curr_gb:.2f}GB\n状态: 运行中", "green")
                         mark_notified(state, instance_id, 'resumed')
                 else:
                     logger.warning("启动超时")
@@ -304,7 +325,7 @@ def check_and_act(config, state):
                     mark_notified(state, instance_id, 'start_failed')
 
         elif status == "Running":
-            logger.info("实例运行中，流量正常 ✅")
+            logger.info("实例运行中，流量正常")
         else:
             logger.info(f"实例状态: {status}，不干预")
 
@@ -319,7 +340,7 @@ def check_and_act(config, state):
                 logger.info("实例已停止")
 
                 if can_notify(state, instance_id, 'overlimit', OVERLIMIT_COOLDOWN):
-                    send_feishu_alert("流量超标已关机", f"当前流量: {curr_gb:.2f}GB\n阈值: {limit}GB\n已执行关机 ✅", "red")
+                    send_feishu_alert("流量超标已关机", f"当前流量: {curr_gb:.2f}GB\n阈值: {limit}GB\n已执行关机", "red")
                     mark_notified(state, instance_id, 'overlimit')
 
             except Exception as e:

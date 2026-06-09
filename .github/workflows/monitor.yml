@@ -9,6 +9,7 @@ on:
 
 env:
   PYTHON_VERSION: '3.11'
+  STATE_FILE: ${{ github.workspace }}/.state/monitor_state.json
 
 jobs:
   monitor:
@@ -18,6 +19,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -28,6 +31,16 @@ jobs:
         run: |
           pip install aliyun-python-sdk-core aliyun-python-sdk-ecs aliyun-python-sdk-bssopenapi requests
 
+      - name: Create state directory
+        run: mkdir -p ${{ github.workspace }}/.state
+
+      - name: Restore state file
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.state
+          key: monitor-state-${{ secrets.ECS_INSTANCE_ID }}
+          restore-keys: monitor-state-
+
       - name: Run monitor
         env:
           ALIYUN_ACCESS_KEY_ID: ${{ secrets.ALIYUN_ACCESS_KEY_ID }}
@@ -37,6 +50,9 @@ jobs:
           CDT_TRAFFIC_LIMIT_GB: ${{ secrets.CDT_TRAFFIC_LIMIT_GB }}
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
+          INSTANCE_NAME: ${{ secrets.INSTANCE_NAME }}
+          STATE_FILE: ${{ env.STATE_FILE }}
         run: python .github/workflows/monitor.py
 
       - name: Upload logs
@@ -44,5 +60,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: monitor-logs
-          path: monitor.log
-          retention-days: 1
+          path: |
+            ${{ github.workspace }}/.state/
+            ${{ github.workspace }}/*.log
+          retention-days: 3
