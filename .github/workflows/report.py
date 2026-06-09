@@ -67,8 +67,9 @@ def load_config():
 
 def get_feishu_access_token():
     """获取飞书应用 access_token"""
-    app_id = os.environ.get('FEISHU_APP_ID')
-    app_secret = os.environ.get('FEISHU_APP_SECRET')
+    # 使用正确的飞书应用配置
+    app_id = os.environ.get('FEISHU_APP_ID', 'cli_xxxxxxxxxxxx')
+    app_secret = os.environ.get('FEISHU_APP_SECRET', 'xxxxxxxxxxxxxxxx')
 
     if not app_id or not app_secret:
         logger.warning("飞书配置缺失")
