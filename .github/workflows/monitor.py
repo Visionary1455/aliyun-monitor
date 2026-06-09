@@ -21,13 +21,31 @@ from aliyunsdkecs.request.v20140526.DescribeInstancesRequest import DescribeInst
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    stream=sys.stdout
-)
+# 日志文件路径
+LOG_FILE = os.environ.get('LOG_FILE', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'monitor.log'))
+
+# 配置日志 - 同时输出到 stdout 和文件
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# 清除之前的 handlers
+logger.handlers.clear()
+
+# 控制台输出
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(console_handler)
+
+# 文件输出
+try:
+    log_dir = os.path.dirname(LOG_FILE)
+    if log_dir and not os.path.exists(log_dir):
+        os.makedirs(log_dir, exist_ok=True)
+    file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logger.addHandler(file_handler)
+except Exception as e:
+    logger.warning(f"无法创建日志文件: {e}")
 
 # 状态文件路径 (使用 GitHub HOME 目录，跨 step 可保持)
 STATE_FILE = os.environ.get('STATE_FILE', os.path.expanduser('~/monitor_state.json'))

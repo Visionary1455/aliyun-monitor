@@ -53,6 +53,7 @@ jobs:
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
           INSTANCE_NAME: ${{ secrets.INSTANCE_NAME }}
           STATE_FILE: ${{ env.STATE_FILE }}
+          LOG_FILE: ${{ github.workspace }}/monitor.log
         run: python .github/workflows/monitor.py
 
       - name: Upload logs
@@ -62,5 +63,5 @@ jobs:
           name: monitor-logs
           path: |
             ${{ github.workspace }}/.state/
-            ${{ github.workspace }}/*.log
+            ${{ github.workspace }}/monitor.log
           retention-days: 3
