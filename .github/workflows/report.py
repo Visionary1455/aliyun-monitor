@@ -109,9 +109,12 @@ def send_feishu_report(title, content_lines):
         }
     }
 
+    # 从环境变量获取用户 open_id
+    user_open_id = os.environ.get('FEISHU_USER_OPEN_ID', 'ou_xxxxxxxxxxxxxxxx')
+
     try:
         url = "https://open.feishu.cn/open-apis/im/v1/messages"
-        params = {"receive_id_type": "app_id"}
+        params = {"receive_id_type": "open_id"}
 
         headers = {
             "Authorization": f"Bearer {access_token}",
@@ -119,7 +122,7 @@ def send_feishu_report(title, content_lines):
         }
 
         message_data = {
-            "receive_id": app_id,
+            "receive_id": user_open_id,
             "msg_type": "post",
             "content": json.dumps(msg_data)
         }

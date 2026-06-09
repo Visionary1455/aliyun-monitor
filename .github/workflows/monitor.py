@@ -117,7 +117,7 @@ def get_feishu_access_token():
 
 
 def send_feishu_message(title, message, color_status="green"):
-    """发送飞书消息"""
+    """发送飞书消息给用户"""
     access_token, app_id = get_feishu_access_token()
     if not access_token:
         logger.warning("无法获取飞书 access_token")
@@ -126,18 +126,21 @@ def send_feishu_message(title, message, color_status="green"):
     icon = "✅" if color_status == "green" else "⚠️"
     full_message = f"{icon} *{title}*\n\n{message}"
 
+    # 从环境变量获取用户 open_id，如果没有则使用默认值
+    user_open_id = os.environ.get('FEISHU_USER_OPEN_ID', 'ou_xxxxxxxxxxxxxxxx')
+
     try:
         url = "https://open.feishu.cn/open-apis/im/v1/messages"
-        params = {"receive_id_type": "app_id"}
+        params = {"receive_id_type": "open_id"}
 
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json; charset=utf-8"
         }
 
-        # 发送给应用自身
+        # 发送给用户 (使用 open_id)
         message_data = {
-            "receive_id": app_id,
+            "receive_id": user_open_id,
             "msg_type": "text",
             "content": json.dumps({"text": full_message})
         }
