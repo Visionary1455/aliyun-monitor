@@ -124,6 +124,7 @@ def send_feishu_message(title, message, color_status="green"):
         return
 
     icon = "✅" if color_status == "green" else "⚠️"
+    full_message = f"{icon} *{title}*\n\n{message}"
 
     try:
         url = "https://open.feishu.cn/open-apis/im/v1/messages"
@@ -134,20 +135,22 @@ def send_feishu_message(title, message, color_status="green"):
             "Content-Type": "application/json; charset=utf-8"
         }
 
-        # 使用 app_id 发送给应用自身（应用创建的机器人可以在应用消息中查看）
+        # 发送给应用自身
         message_data = {
             "receive_id": app_id,
             "msg_type": "text",
-            "content": json.dumps({"text": f"{icon} *{title}*\n\n{message}"})
+            "content": json.dumps({"text": full_message})
         }
 
         resp = requests.post(url, params=params, headers=headers, json=message_data, timeout=10)
         result = resp.json()
 
+        logger.info(f"飞书API响应: {result}")
+
         if result.get("code") == 0:
             logger.info(f"飞书消息发送成功: {title}")
         else:
-            logger.warning(f"飞书消息��送���败: {result.get('msg', 'unknown error')}")
+            logger.warning(f"飞书消息发送失败: code={result.get('code')}, msg={result.get('msg')}")
 
     except Exception as e:
         logger.error(f"飞书消息发送异常: {e}")
