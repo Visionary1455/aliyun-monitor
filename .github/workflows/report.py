@@ -312,6 +312,19 @@ def main():
     logger.info("阿里云 ECS 日报生成开始")
     logger.info("=" * 50)
 
+    # 检查是否在配置的时段发送日报
+    report_hour = os.environ.get('REPORT_HOUR', '9')
+    current_hour = datetime.now().hour
+
+    try:
+        target_hours = [int(h.strip()) for h in report_hour.split(',')]
+    except ValueError:
+        target_hours = [9]
+
+    if current_hour not in target_hours:
+        logger.info(f"当前时间 {current_hour} 点，不在配置的日报时段 {report_hour} 点，跳过发送")
+        return
+
     config = load_config()
     if not config:
         logger.error("配置加载失败")

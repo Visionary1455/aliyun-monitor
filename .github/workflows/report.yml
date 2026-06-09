@@ -36,6 +36,7 @@ jobs:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           INSTANCE_NAME: ${{ secrets.INSTANCE_NAME }}
+          REPORT_HOUR: ${{ secrets.REPORT_HOUR }}
         run: python .github/workflows/report.py
 
       - name: Upload logs
