@@ -1,143 +1,293 @@
-# 阿里云 CDT 流量监控 & 自动止损脚本 (支持国内/国际双版本)
+# 阿里云 ECS 保活监控指南
 
-![OS](https://img.shields.io/badge/OS-Linux-blue?logo=linux)
-![Python](https://img.shields.io/badge/Python-3.x-yellow?logo=python)
-![Alibaba Cloud](https://img.shields.io/badge/Alibaba%20Cloud-Domestic%20%26%20International-orange?logo=alibabacloud)
+## 一、功能概述
 
-一个不仅为自定义 **Alpine** 系统准备的，更全面支持 **阿里云国内版（人民币结算）** 与 **阿里云国际版（美元结算）** 的 **CDT 公网流量监控 + 自动止损工具**。  
-在流量或账单即将失控前 **强制关机**，全面适配多节点区域及 Python 3.12 兼容性问题，真正帮你守住钱包 💰。
+本项目实现阿里云 ECS 实例的自动化监控与保活，主要功能：
 
----
-
-## 📺 视频教程
-
-<div align="center">
-  <a href="https://www.bilibili.com/video/BV1b2rfBnEZg/" target="_blank">
-    <img width="650" src="https://images.weserv.nl/?url=i2.hdslb.com/bfs/archive/49eb886eab33d88e1cc88c2d3bd624d7eb703d32.jpg" alt="点击观看演示视频" />
-  </a>
-  <br><br>
-  <a href="https://www.bilibili.com/video/BV1b2rfBnEZg/" target="_blank">
-    <img src="https://img.shields.io/badge/Bilibili-点击上方封面或此处观看完整视频-FF8EB3?style=for-the-badge&logo=bilibili&logoColor=white" alt="Bilibili Video Tutorial"/>
-  </a>
-  <br>
-  <p><b>📺 超详尽保姆级从零操作演示与避坑防潮指南！</b></p>
-</div>
+| 功能 | 说明 |
+|------|------|
+| **CDT 流量监控** | 监控阿里云 CDT 流量使用量，防止流量超标产生额外费用 |
+| **流量超限自动关机** | 当流量超过阈值时，自动停止实例止损 |
+| **实例停止自动启动** | 当检测到实例停止时，自动启动恢复服务 |
+| **飞书消息通知** | 通过飞书发送告警通知和每日日报 |
+| **每日运行报表** | 每天定时发送实例运行状态和流量使用报表 |
 
 ---
 
-## ✨ 核心特性
+## 二、配置清单
 
-- 🌍 **双轨支持**：完美支持中国内地账单系统（￥）与国际账单系统（$）。
-- 🛡️ **流量熔断**：每分钟检测 CDT 使用量，超过阈值立即关机止损。
-- 💵 **底层双端兼容**：绕过 API 限制，动态适配业务节点读取当月实时账单余额。
-- 🚀 **防黑洞卡死机制**：内置 SNI 与 IPv6 黑洞自动绕过补丁，保障常驻任务在高延迟或 Python 3.12+ 环境下稳定运行。
-- 🔄 **自动恢复**：次月流量重置后自动开机恢复业务。
-- 📊 **多账号多地域**：同时监控任意组合（不同账号、不同区域、不同内外版实例）。
-- 📩 **Telegram 通知**：异常监控告警 + 每日图文并茂的汇总日报。
+### 2.1 需要配置的 GitHub Secrets
 
----
+在 GitHub 仓库 → `Settings` → `Secrets and variables` → `Actions` 中添加以下变量：
 
-## ⭐ 运行截图
-
-<div align="center">
-  <img src="https://github.com/user-attachments/assets/381e346d-604b-47c7-9970-e4e29c87bfb0" width="320" alt="运行截图" />
-  <br>
-  <p><i>运行效果预览</i></p>
-</div>
-
----
-
-## 🛠️ 前置准备
-
-### 1️⃣ Telegram 通知参数
-- 创建机器人并获取 Token：[@BotFather](https://t.me/BotFather)
-- 获取您接收消息的 Chat ID：[@userinfobot](https://t.me/userinfobot)
-
-### 2️⃣ 阿里云 RAM 权限设置
-为了安全起见，**强烈建议不要使用主账号**。请前往阿里云 RAM 访问控制台创建子用户并授予系统权限：
-- 🇨🇳 **国内版 RAM 权限设置入口**：👉 [点击进入阿里云国内站 RAM 控制台](https://ram.console.aliyun.com/users)
-- 🌐 **国际版 RAM 权限设置入口**：�� [点击进入阿里云国际站 RAM 控制台](https://ram.console.alibabacloud.com/users)
-
-需要授予的安全权限：
-- `AliyunECSFullAccess`（含开关机与查询权限）
-- `AliyunCDTReadOnlyAccess` 或 `AliyunCDTFullAccess`（查询流量）
-- `AliyunBSSReadOnlyAccess`（查询财务与账单模块）
-
-*(若需要了解详细的创建与使用流程，请查阅本项目内的 [实例开通指南](实例开通.md))*
+| Secret 名称 | 必须 | 说明 | 示例值 |
+|-------------|------|------|--------|
+| `ALIYUN_ACCESS_KEY_ID` | ✅ | 阿里云 AccessKey ID | `LTAI5txxxxxxxxxxxx` |
+| `ALIYUN_ACCESS_KEY_SECRET` | ✅ | 阿里云 AccessKey Secret | `xxxxxxxxxxxxxxxxxx` |
+| `ALIYUN_REGION` | ✅ | ECS 实例所在区域 | `ap-northeast-1`（东京）|
+| `ECS_INSTANCE_ID` | ✅ | 要监控的实例 ID | `i-bp1xxxxxxxxxxxx` |
+| `CDT_TRAFFIC_LIMIT_GB` | ✅ | 流量阈值（GB） | `180` |
+| `FEISHU_APP_ID` | ✅ | 飞书应用 App ID | `cli_xxxxxxxxxxxx` |
+| `FEISHU_APP_SECRET` | ✅ | 飞书应用 App Secret | `xxxxxxxxxxxxxxxx` |
+| `FEISHU_USER_OPEN_ID` | ✅ | 接收通知的飞书用户 Open ID | `ou_xxxxxxxxxxxxxxxx` |
+| `INSTANCE_NAME` | ❌ | 实例显示名称，默认 "ECS-Monitor" | `东京服务器` |
+| `REPORT_HOUR` | ❌ | 每日日报发送时间，默认 9 | `9` |
 
 ---
 
-## （一） Alpine Linux（VNC）初始化（可选，针对底层系统玩家）
+## 三、各配置项获取教程
 
-> ⚠️ **如果您是普通的 Linux (如 Ubuntu/Debian) 用户，请直接跳过本节至 "(三) 一键安装"，本节仅适用于脱水版 Alpine 系统。**
+### 3.1 阿里云 AccessKey（必须）
 
-1. 登录阿里云实例的 **VNC 控制台**
-2. 复制本项目中 `vnc.sh` 的全量内容。您可以直接一键复制执行以下命令来获取：
-前往 GitHub 仓库直接打开 [vnc.sh](https://raw.githubusercontent.com/10000ge10000/aliyun_monitor/main/vnc.sh) 复制源码全文
-3. 将代码 **完整粘贴到 VNC 界面并回车执行**。
-4. 初始完毕后即可按以下默认信息 SSH 远程登录：
-   - **用户名**：`root`
-   - **初始化密码**：`yiwan123`
+1. 登录阿里云控制台：https://console.aliyun.com
+2. 鼠标悬停右上角头像 → `AccessKey管理`
+3. 选择「使用子用户 AccessKey」
+4. 点击「创建用户」，勾选「编程访问」
+5. 记录生成的 `AccessKey ID` 和 `AccessKey Secret`
+6. **重要**：为该用户添加权限策略，参考下方「最小权限配置」
 
-## （二） Alpine 修复 GRUB 引导并重装 Debian 13 (可选扩展)
+#### 最小权限策略（JSON）
 
-> 适用于 **系统无法启动 / GRUB 损坏 / Debian 无法进入** 等进阶场景。通过 **Alpine Linux + chroot** 的方式修复引导并重装 Debian 13。
-
-使用 **root 用户** 登录 Alpine 后，下载并执行脚本：
-```bash
-wget -qO- https://raw.githubusercontent.com/10000ge10000/aliyun_monitor/main/install2.sh | sh
+```json
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeInstances",
+        "ecs:DescribeInstanceStatus",
+        "ecs:StartInstance",
+        "ecs:StopInstance"
+      ],
+      "Resource": "acs:ecs:*:*:instance/<你的实例ID>"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "bssopenapi:QueryInstanceBill"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
 ```
 
+> 将 `<你的实例ID>` 替换为你的实际 ECS 实例 ID（如 `i-bp123456789`）
+
 ---
 
-## （三） 一键安装与配置监控 (所有适用者推荐)
+### 3.2 阿里云地域 Region
 
-使用 **root 用户** 在任意连通互联网的 Linux 服务器或所监控的 ECS 本机上执行：
+| 区域 | Region ID |
+|------|-----------|
+| 华北2（北京） | `cn-beijing` |
+| 华北3（张家口） | `cn-zhangjiakou` |
+| 华东1（杭州） | `cn-hangzhou` |
+| 华东2（上海） | `cn-shanghai` |
+| 华南1（深圳） | `cn-shenzhen` |
+| 香港 | `cn-hongkong` |
+| 新加坡 | `ap-southeast-1` |
+| 东京 | `ap-northeast-1` |
+| 硅谷 | `us-west-1` |
+| 弗吉尼亚 | `us-east-1` |
+
+获取方式：ECS 控制台 → 实例列表 → 查看实例详情中的「地域」
+
+---
+
+### 3.3 ECS 实例 ID
+
+1. 登录阿里云 ECS 控制台：https://ecs.console.aliyun.com
+2. 进入「实例列表」
+3. 复制「实例 ID」列的值（以 `i-` 开头）
+
+---
+
+### 3.4 飞书应用配置（必须）
+
+#### 3.4.1 获取 App ID 和 App Secret
+
+1. 打开飞书开放平台：https://open.feishu.cn/
+2. 进入「应用开发」→「创建应用」→「企业自建应用」
+3. 填写应用名称（如「阿里云监控」）并创建
+4. 在应用详情页面获取：
+   - `App ID`：类似 `cli_xxxxxxxxxxxx`
+   - `App Secret`：类似 `xxxxxxxxxxxxxxxx`
+
+#### 3.4.2 添加应用权限
+
+在应用详情 → `权限管理` 中添加：
+- `im:message:send_as_bot` - 发送消息
+- `im:chat:create` - 创建群聊
+
+#### 3.4.3 获取你的 Open ID
+
+**方法1（推荐）：** 给机器人发消息
+
+1. 在飞书中搜索并打开你的应用
+2. 给应用发送一条消息（如 "测试"）
+3. 运行以下命令获取 Open ID：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/10000ge10000/aliyun_monitor/main/install.sh | sh
+# 获取应用 token
+TOKEN=$(curl -s -X POST "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal" \
+  -H "Content-Type: application/json; charset=utf-8" \
+  -d '{"app_id": "你的APP_ID", "app_secret": "你的APP_SECRET"}' | python3 -c "import json,sys; print(json.load(sys.stdin).get('tenant_access_token',''))")
+
+# 查看应用收到的消息（需要先发消息）
+curl -s "https://open.feishu.cn/open-api/im/v1/messages?receive_id_type=user_id&container_id_type=app" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-脚本将提供丝滑的交互式配置，自动：
-* 检测并修齐 Python 运行微环境与 Pip 依赖。
-* 拉取已深度解除底层网关 Bug 的执行组件。
-* 引导您录入 Telegram 配置、选择站别类型（人民币或美元账单）、输入并配置多个待监控账号。
-* 设置系统计划任务（Cron），按 **5分钟/次** 及每天早 9 点执行巡检与汇报。
+**方法2：**
 
-> 提示：如果日后需要增加、删除机器或刷新底层组件配置，只需再次运行该脚本命令即可进入智能管理面板。
+在飞书中打开：https://api.feishu.cn/toolkit/tips
 
 ---
 
-## ⏸️ 暂停/恢复某台机器的监控
+## 四、配置步骤
 
-当某台机器处于特殊状态（例如安全锁定、维护或暂不希望自动开机/关机）时，可以临时暂停监控：
+### 4.1 Fork 或使用本仓库
 
-1. 重新运行安装脚本进入管理面板。
-2. 选择 **“暂停/恢复监控实例 (Pause/Resume)”**。
-3. 选择目标机器（如 `HK-02`）即可切换暂停/恢复状态。
+可以直接使用本仓库，或 fork 到自己的 GitHub 账号下。
 
-暂停后：
-- `monitor.py` 将跳过该机器的巡检与自动开关机。
-- `report.py` 会在日报里标注“监控已暂停”。
+### 4.2 配置 GitHub Secrets
 
----
+1. 进入仓库 → `Settings` → `Secrets and variables` → `Actions`
+2. 点击「New repository secret」
+3. 按上方表格逐个添加配置项
+4. 建议按以下顺序添加：
 
-## ��️ 卸载
-
-```bash
-wget -qO- https://raw.githubusercontent.com/10000ge10000/aliyun_monitor/main/uninstall.sh | sh
+```
+1. ALIYUN_ACCESS_KEY_ID
+2. ALIYUN_ACCESS_KEY_SECRET
+3. ALIYUN_REGION
+4. ECS_INSTANCE_ID
+5. CDT_TRAFFIC_LIMIT_GB
+6. FEISHU_APP_ID
+7. FEISHU_APP_SECRET
+8. FEISHU_USER_OPEN_ID
+9. INSTANCE_NAME (可选)
+10. REPORT_HOUR (可选，默认9)
 ```
 
+### 4.3 验证配置
+
+1. 进入仓库 → `Actions`
+2. 点击「Aliyun ECS Monitor」
+3. 点击「Run workflow」→「Run workflow」
+4. 等待 1-2 分钟执行完成
+5. 查看「Actions run」日志确认无报错
+6. 检查飞书是否收到测试消息
+
 ---
 
-## ⚠️ 免责声明
+## 五、配置示例
 
-1. 本项目仅供学习与技术交流使用。
-2. 虽然我们尽力适配和兜底了绝大部分的系统、网络、API 阻断与连接层 BUG，但**作者不对因脚本异常、API 变更、依赖挂除或配置错误导致的任何流量流失及费用直接负责。**
-3. **强烈建议同时在阿里云费用中心后台设置「预算告警 / 垫底限额」作为最后的防线。**
+| Secret 名称 | 示例值 | 说明 |
+|-------------|--------|------|
+| `ALIYUN_ACCESS_KEY_ID` | `LTAI5t1234567890abcde` | 阿里云 AccessKey |
+| `ALIYUN_ACCESS_KEY_SECRET` | `abcd1234EFGH5678ijkL9012` | 阿里云 AccessKey Secret |
+| `ALIYUN_REGION` | `ap-northeast-1` | 东京区域 |
+| `ECS_INSTANCE_ID` | `i-bp1234567890abcdef` | ECS 实例 ID |
+| `CDT_TRAFFIC_LIMIT_GB` | `180` | 流量阈值 180GB |
+| `FEISHU_APP_ID` | `cli_xxxxxxxxxxxx` | 飞书应用 ID |
+| `FEISHU_APP_SECRET` | `xxxxxxxxxxxxxxxx` | 飞书应用密钥 |
+| `FEISHU_USER_OPEN_ID` | `ou_xxxxxxxxxxxxxxxx` | 飞书用户 OpenID |
+| `INSTANCE_NAME` | `东京ECS-01` | 实例显示名称 |
+| `REPORT_HOUR` | `9` | 每天9点发送日报 |
 
 ---
 
-## ⭐ 欢迎 Star 支持
+## 六、实现原理
 
-如果这个项目帮您梳理了多节点的部署或者成功避免了一次“破产”，欢迎点个 ⭐！你的支持是我们持续维护的动力 🙏
+### 6.1 整体架构
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    GitHub Actions                        │
+│  ┌─────────────────────────────────────────────────────┐ │
+│  │  monitor.py (每5分钟执行一次)                        │ │
+│  │                                                       │ │
+│  │  1. 加载配置 (从 Secrets 环境变量)                   │ │
+│  │  2. 调用阿里云 API 查询流量和实例状态                │ │
+│  │  3. 判断逻辑：                                        │ │
+│  │     - 流量超标 → 停止实例                            │ │
+│  │     - 实例停止 → 启动实例                            │ │
+│  │     - 到配置时间 → 发送日报                          │ │
+│  │  4. 飞书通知 (根据配置发送给用户)                     │ │
+│  │  5. 保存状态到缓存文件                               │ │
+│  └─────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────┐
+│                      阿里云 API                          │
+│  • CDT 流量查询 (ListCdtInternetTraffic)                │
+│  • 实例状态查询 (DescribeInstances)                     │
+│  • 启动实例 (StartInstance)                             │
+│  • 停止实例 (StopInstance)                              │
+└─────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────┐
+│                       飞书                               │
+│  • 获取应用 AccessToken                                  │
+│  • 发送消息给用户 (Open ID)                              │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 6.2 状态缓存机制
+
+- 使用 `actions/cache` 保存状态文件
+- 记录每个事件上次通知的时间戳（冷却机制）
+- 避免重复发送告警
+
+### 6.3 冷却时间
+
+| 事件类型 | 冷却时间 |
+|----------|----------|
+| 启动失败 | 1小时 |
+| 流量超标 | 24小时 |
+| 恢复运行 | 1小时 |
+| 启动成功 | 1小时 |
+
+### 6.4 日报发送逻辑
+
+1. 每5分钟检查一次当前小时是否在 `REPORT_HOUR` 配置中
+2. 如果是配置的小时，检查当天是否已发送过日报
+3. 未发送过则生成并发送日报
+
+---
+
+## 七、常见问题
+
+### Q1: 启动实例时报错 "Operation denied"
+A: 检查 RAM 权限是否正确配置，确保有 `StartInstance` 权限
+
+### Q2: 流量查询失败
+A: 确认 ECS 实例已开通 CDT 流量包，且 AccessKey 有 `bssopenapi` 权限
+
+### Q3: 飞书消息发送失败
+A: 检查 App ID/Secret 是否正确，应用是否有 `im:message:send_as_bot` 权限
+
+### Q4: Actions 执行失败
+A: 查看 Actions 日志确认具体错误，常见原因：Secrets 配置错误、权限不足
+
+---
+
+## 八、注意事项
+
+1. **安全第一**：所有敏感信息（AccessKey、App Secret）必须存储在 GitHub Secrets 中，切勿硬编码
+2. **最小权限**：建议创建专用的 RAM 子用户，只授予必要的 API 权限
+3. **测试环境**：首次配置建议先在测试实例上验证
+4. **监控日志**：定期查看 Actions 运行日志确认工作正常
+
+---
+
+## 九、仓库地址
+
+https://github.com/hizzt/aliyun-monitor
+
+如有问题欢迎提交 Issue！
