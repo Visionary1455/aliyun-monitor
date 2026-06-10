@@ -405,17 +405,19 @@ def main():
     logger.info("阿里云 ECS 监控开始")
     logger.info("=" * 50)
 
-    # 加载配置
-    config = load_config()
-    if not config:
-        logger.error("配置加载失败")
-        return
+    try:
+        # 加载配置
+        config = load_config()
+        if not config:
+            logger.error("配置加载失败")
+            send_feishu_alert("监控错误", "配置加载失败，请检查 Secrets 配置", "red")
+            return
 
-    # 加载状态
-    state = load_state()
+        # 加载状态
+        state = load_state()
 
-    # 1. 执行监控（流量检查、实例启停）
-    check_and_act(config, state)
+        # 1. 执行监控（流量检查、实例启停）
+        check_and_act(config, state)
 
     # 2. 检查是否发送日报
     report_hour = os.environ.get('REPORT_HOUR', '9')
@@ -461,6 +463,10 @@ def main():
                 logger.info("日报发送成功")
             except Exception as e:
                 logger.error(f"日报发送失败: {e}")
+
+    except Exception as e:
+        logger.error(f"监控执行失败: {e}")
+        send_feishu_alert("监控执行失败", f"错误信息: {str(e)}", "red")
 
     # 保存状态
     save_state(state)
