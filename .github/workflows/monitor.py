@@ -82,7 +82,7 @@ def load_config():
         'sk': os.environ.get('ALIYUN_ACCESS_KEY_SECRET'),
         'region': os.environ.get('ALIYUN_REGION'),
         'instance_id': os.environ.get('ECS_INSTANCE_ID'),
-        'traffic_limit': float(os.environ.get('CDT_TRAFFIC_LIMIT_GB', '180')),
+        'traffic_limit': int(os.environ.get('CDT_TRAFFIC_LIMIT_GB', '180')),
         'feishu_app_id': os.environ.get('FEISHU_APP_ID'),
         'feishu_app_secret': os.environ.get('FEISHU_APP_SECRET'),
         'feishu_chat_id': os.environ.get('FEISHU_CHAT_ID'),
