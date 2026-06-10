@@ -398,6 +398,13 @@ def check_and_act(config, state):
 
     if status is None:
         logger.error("无法获取实例状态")
+        if can_notify(state, instance_id, 'status_failed'):
+            _alert(config,
+                "无法获取实例状态",
+                build_message(config, curr_gb, extra_lines=["原因: 实例不存在或 AK/SK 无权限"]),
+                "red",
+            )
+            mark_notified(state, instance_id, 'status_failed')
         return curr_gb, None
 
     # 3. 决策逻辑
