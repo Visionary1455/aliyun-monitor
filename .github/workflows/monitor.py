@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 阿里云 ECS CDT 流量监控 - GitHub Actions 版本
-支持飞书告警
+支持飞书告警和日报
 """
 
 import os
@@ -11,6 +11,7 @@ import json
 import time
 import logging
 import requests
+from datetime import datetime, timedelta
 from aliyunsdkcore.client import AcsClient
 from aliyunsdkcore.request import CommonRequest
 from aliyunsdkecs.request.v20140526.StartInstanceRequest import StartInstanceRequest
@@ -218,13 +219,31 @@ def get_instance_status(client, instance_id):
         return None
 
 
+def get_instance_info_for_report(client, instance_id):
+    """获取实例信息（用于日报）"""
+    try:
+        req = DescribeInstancesRequest()
+        req.set_InstanceIds(json.dumps([instance_id]))
+        resp = client.do_action_with_exception(req)
+        data = json.loads(resp.decode('utf-8'))
+        instances = data.get("Instances", {}).get("Instance", [])
+        if instances:
+            inst = instances[0]
+            return {
+                'status': inst.get('Status'),
+                'cpu': inst.get('Cpu'),
+                'memory': inst.get('Memory'),
+                'ip': inst.get('VpcAttributes', {}).get('PrivateIpAddress', [''])[0],
+            }
+        return {}
+    except Exception as e:
+        logger.error(f"获取实例信息失败: {e}")
+        return {}
+
+
 def get_cdt_traffic(ak, sk, region):
     """获取 CDT 流量使用量"""
     # 根据区域选择 CDT 端点
-    # 国内区: cdt.aliyuncs.com
-    # 国际区: cdt.ap-southeast-1.aliyuncs.com 等
-
-    # 判断是否为国际区
     international_regions = [
         'cn-hongkong', 'ap-southeast-1', 'ap-southeast-2', 'ap-southeast-3',
         'ap-northeast-1', 'us-west-1', 'us-east-1', 'eu-central-1',
@@ -395,8 +414,53 @@ def main():
     # 加载状态
     state = load_state()
 
-    # 执行监控
+    # 1. 执行监控（流量检查、实例启停）
     check_and_act(config, state)
+
+    # 2. 检查是否发送日报
+    report_hour = os.environ.get('REPORT_HOUR', '9')
+    current_hour = datetime.now().hour
+
+    try:
+        target_hours = [int(h.strip()) for h in report_hour.split(',')]
+    except ValueError:
+        target_hours = [9]
+
+    if current_hour in target_hours:
+        # 检查是否已经发送过日报（每小时只发一次）
+        last_report = state.get('last_report_date', '')
+        today = datetime.now().strftime('%Y-%m-%d')
+
+        if last_report != today:
+            logger.info("发送日报时间到，生成并发送日报...")
+            from aliyunsdkecs.request.v20140526.DescribeInstanceMonitorDataRequest import DescribeInstanceMonitorDataRequest
+
+            # 生成日报并发送
+            try:
+                client = AcsClient(config['ak'], config['sk'], config['region'])
+
+                # 获取实例信息
+                instance_info = get_instance_info_for_report(client, config['instance_id'])
+
+                # 获取流量
+                curr_gb = get_cdt_traffic(config['ak'], config['sk'], config['region']) or 0
+
+                # 构建日报内容
+                lines = []
+                lines.append(f"实例名称: {config['name']}")
+                lines.append(f"实例ID: {config['instance_id']}")
+                lines.append(f"实例状态: {'运行中' if instance_info.get('status') == 'Running' else '已停止'}")
+                lines.append(f"流量使用: {curr_gb:.2f}GB / {config['traffic_limit']}GB")
+                lines.append(f"报表生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+                title = f"📊 {config['name']} 日报 - {today}"
+                send_feishu_message(title, '\n'.join(lines), "green")
+
+                # 记录已发送
+                state['last_report_date'] = today
+                logger.info("日报发送成功")
+            except Exception as e:
+                logger.error(f"日报发送失败: {e}")
 
     # 保存状态
     save_state(state)
