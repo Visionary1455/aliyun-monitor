@@ -7,6 +7,8 @@
 - 实例停止时自动启动
 - 飞书机器人告警通知
 - 每5分钟自动检查
+- **多实例监控**（同账号/跨账号皆可，逗号分隔配置，故障隔离）
+- **每日汇总日报**（北京时间）
 
 ## 架构
 
@@ -28,20 +30,29 @@ GitHub Actions (定时/手动)
 
 | Secret 名称 | 说明 | 示例值 |
 |-------------|------|--------|
-| `ALIYUN_ACCESS_KEY_ID` | 阿里云 AccessKey ID | LTAI5t********** |
-| `ALIYUN_ACCESS_KEY_SECRET` | 阿里云 AccessKey Secret | **请创建 RAM 子用户** |
-| `ALIYUN_REGION` | ECS 实例区域 | cn-hongkong |
-| `ECS_INSTANCE_ID` | 要监控的实例 ID | i-bp1********** |
+| `ALIYUN_ACCESS_KEY_ID` | 阿里云 AccessKey ID（多实例用 `,` 分隔） | `LTAI5t**` 或 `LTAI5tA,LTAI5tB` |
+| `ALIYUN_ACCESS_KEY_SECRET` | 阿里云 AccessKey Secret（多实例用 `,` 分隔） | **请创建 RAM 子用户** |
+| `ALIYUN_REGION` | ECS 实例区域（多实例用 `,` 分隔） | `cn-hongkong` |
+| `ECS_INSTANCE_ID` | 要监控的实例 ID（多实例用 `,` 分隔） | `i-bp1**` 或 `i-bp1**,i-bp2**` |
+| `FEISHU_USER_OPEN_ID` | 接收通知的飞书用户 Open ID | `ou_**` |
 
 ### 可选配置
 
 | Secret 名称 | 说明 | 默认值 |
 |-------------|------|--------|
-| `CDT_TRAFFIC_LIMIT_GB` | 流量阈值(GB) | 180 |
-| `INSTANCE_NAME` | 实例显示名称 | ECS-Monitor |
+| `CDT_TRAFFIC_LIMIT_GB` | 流量阈值 GB（多实例用 `,` 分隔） | 180 |
+| `INSTANCE_NAME` | 实例显示名称（多实例用 `,` 分隔） | ECS-Monitor |
+| `REPORT_HOUR` | 日报小时（北京时间 UTC+8，多个用 `,` 分隔） | 9 |
 | `FEISHU_APP_ID` | 飞书应用 App ID | cli_********** |
 | `FEISHU_APP_SECRET` | 飞书应用 App Secret | ******** |
 | `FEISHU_CHAT_ID` | 飞书群聊 ID | (可选) |
+
+### 多实例配置规则
+
+6 项以逗号分隔的配置（AK/SK/Region/InstanceID/Limit/Name）数量必须 **一致或为 1**：
+- **1 个值**：所有实例共享（典型：同账号同区域多台机器，AK/SK/Region 各填一个）
+- **N 个值**：按位置一一对应（典型：跨账号每台机器各自的 AK/SK）
+- 数量不匹配启动时会失败并通过飞书告警
 
 ## 阿里云 RAM 权限配置 (重要!)
 
@@ -162,6 +173,12 @@ A: 确认 ECS 实例已开通 CDT 流量包，且 AccessKey 有 bssopenapi 权�
 
 ### Q: 飞书消息发送失败
 A: 检查 App ID/Secret 是否正确，应用是否有 im:message:send_as_bot 权限。
+
+### Q: 多实例配置数量不匹配
+A: 启动时会以飞书告警提示。检查 6 项逗号分隔配置（AK/SK/Region/ID/Limit/Name）数量必须一致或为 1。
+
+### Q: 日报发送时间不对
+A: `REPORT_HOUR` 按 **北京时间 (UTC+8)** 解析。触发条件 `current_hour >= min(REPORT_HOUR)` 且当天未发，避免 cron 延迟漏报。
 
 ## 安全建议
 

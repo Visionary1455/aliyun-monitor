@@ -10,7 +10,8 @@
 | **流量超限自动关机** | 当流量超过阈值时，自动停止实例止损 |
 | **实例停止自动启动** | 当检测到实例停止时，自动启动恢复服务 |
 | **飞书消息通知** | 通过飞书发送告警通知和每日日报 |
-| **每日运行报表** | 每天定时发送实例运行状态和流量使用报表 |
+| **每日运行报表** | 每天定时发送多机汇总状态与流量使用报表（北京时间） |
+| **多实例支持** | 所有配置项支持逗号分隔，单脚本同时监控多台 ECS，故障隔离 |
 
 ---
 
@@ -22,16 +23,21 @@
 
 | Secret 名称 | 必须 | 说明 | 示例值 |
 |-------------|------|------|--------|
-| `ALIYUN_ACCESS_KEY_ID` | ✅ | 阿里云 AccessKey ID | `LTAI5txxxxxxxxxxxx` |
-| `ALIYUN_ACCESS_KEY_SECRET` | ✅ | 阿里云 AccessKey Secret | `xxxxxxxxxxxxxxxxxx` |
-| `ALIYUN_REGION` | ✅ | ECS 实例所在区域 | `ap-northeast-1`（东京）|
-| `ECS_INSTANCE_ID` | ✅ | 要监控的实例 ID | `i-bp1xxxxxxxxxxxx` |
-| `CDT_TRAFFIC_LIMIT_GB` | ✅ | 流量阈值（GB） | `180` |
+| `ALIYUN_ACCESS_KEY_ID` | ✅ | 阿里云 AccessKey ID（多个用逗号分隔） | `LTAI5txxxxxx` 或 `LTAI5tA,LTAI5tB` |
+| `ALIYUN_ACCESS_KEY_SECRET` | ✅ | 阿里云 AccessKey Secret（多个用逗号分隔） | `xxxxx` 或 `secretA,secretB` |
+| `ALIYUN_REGION` | ✅ | ECS 实例所在区域（多个用逗号分隔） | `ap-northeast-1` 或 `cn-hongkong,ap-northeast-1` |
+| `ECS_INSTANCE_ID` | ✅ | 要监控的实例 ID（多个用逗号分隔） | `i-bp1xxx` 或 `i-bp1xxx,i-bp2yyy` |
+| `CDT_TRAFFIC_LIMIT_GB` | ✅ | 流量阈值 GB（多个用逗号分隔） | `180` 或 `180,200` |
 | `FEISHU_APP_ID` | ✅ | 飞书应用 App ID | `cli_xxxxxxxxxxxx` |
 | `FEISHU_APP_SECRET` | ✅ | 飞书应用 App Secret | `xxxxxxxxxxxxxxxx` |
 | `FEISHU_USER_OPEN_ID` | ✅ | 接收通知的飞书用户 Open ID | `ou_xxxxxxxxxxxxxxxx` |
-| `INSTANCE_NAME` | ❌ | 实例显示名称，默认 "ECS-Monitor" | `东京服务器` |
-| `REPORT_HOUR` | ❌ | 每日日报发送时间，默认 9 | `9` |
+| `INSTANCE_NAME` | ❌ | 实例显示名称（多个用逗号分隔） | `东京服务器` 或 `东京,香港` |
+| `REPORT_HOUR` | ❌ | 每日日报发送小时（北京时间，默认 9，多个用逗号分隔） | `9` 或 `9,18` |
+
+> **多实例规则**：6 项以 `,` 分隔的配置（AK/SK/Region/InstanceID/Limit/Name），数量必须一致或为 1。
+> - 配 1 个值：所有实例共享（例如同账号同区域多台机器只需 AK/SK/Region 各填一个）
+> - 配 N 个值：按位置一一对应（例如跨账号每台机器各自的 AK/SK）
+> - 数量不匹配会启动失败并发送告警
 
 ---
 
@@ -185,6 +191,8 @@ curl -s "https://open.feishu.cn/open-api/im/v1/messages?receive_id_type=user_id&
 
 ## 五、配置示例
 
+### 5.1 单机示例
+
 | Secret 名称 | 示例值 | 说明 |
 |-------------|--------|------|
 | `ALIYUN_ACCESS_KEY_ID` | `LTAI5t1234567890abcde` | 阿里云 AccessKey |
@@ -196,7 +204,29 @@ curl -s "https://open.feishu.cn/open-api/im/v1/messages?receive_id_type=user_id&
 | `FEISHU_APP_SECRET` | `xxxxxxxxxxxxxxxx` | 飞书应用密钥 |
 | `FEISHU_USER_OPEN_ID` | `ou_xxxxxxxxxxxxxxxx` | 飞书用户 OpenID |
 | `INSTANCE_NAME` | `东京ECS-01` | 实例显示名称 |
-| `REPORT_HOUR` | `9` | 每天9点发送日报 |
+| `REPORT_HOUR` | `9` | 每天 9 点（北京时间）发送日报 |
+
+### 5.2 多机示例（同账号 2 台）
+
+| Secret 名称 | 示例值 |
+|-------------|--------|
+| `ALIYUN_ACCESS_KEY_ID` | `LTAI5t1234567890abcde` |
+| `ALIYUN_ACCESS_KEY_SECRET` | `abcd1234EFGH5678ijkL9012` |
+| `ALIYUN_REGION` | `ap-northeast-1` |
+| `ECS_INSTANCE_ID` | `i-bp1xxx,i-bp2yyy` |
+| `CDT_TRAFFIC_LIMIT_GB` | `180,200` |
+| `INSTANCE_NAME` | `东京01,东京02` |
+
+### 5.3 多机示例（跨账号 2 台）
+
+| Secret 名称 | 示例值 |
+|-------------|--------|
+| `ALIYUN_ACCESS_KEY_ID` | `LTAI5tAcc1,LTAI5tAcc2` |
+| `ALIYUN_ACCESS_KEY_SECRET` | `secretA,secretB` |
+| `ALIYUN_REGION` | `cn-hongkong,ap-northeast-1` |
+| `ECS_INSTANCE_ID` | `i-bp1xxx,i-bp2yyy` |
+| `CDT_TRAFFIC_LIMIT_GB` | `180,200` |
+| `INSTANCE_NAME` | `香港01,东京01` |
 
 ---
 
@@ -240,9 +270,9 @@ curl -s "https://open.feishu.cn/open-api/im/v1/messages?receive_id_type=user_id&
 
 ### 6.2 状态缓存机制
 
-- 使用 `actions/cache` 保存状态文件
-- 记录每个事件上次通知的时间戳（冷却机制）
-- 避免重复发送告警
+- 使用 `actions/cache` 保存状态文件（固定 key `monitor-state-v1`，自动覆盖）
+- 按 `instance_id` 维度记录每个事件上次通知时间戳（冷却机制）
+- 多实例每台独立 try/except + 落盘，单台失败不影响其它
 
 ### 6.3 冷却时间
 
@@ -255,9 +285,17 @@ curl -s "https://open.feishu.cn/open-api/im/v1/messages?receive_id_type=user_id&
 
 ### 6.4 日报发送逻辑
 
-1. 每5分钟检查一次当前小时是否在 `REPORT_HOUR` 配置中
-2. 如果是配置的小时，检查当天是否已发送过日报
-3. 未发送过则生成并发送日报
+1. 每5分钟检查一次：当前小时（**北京时间 UTC+8**） >= `REPORT_HOUR` 中最早一项
+2. 检查 `last_report_date` 是否为今天，已发送则跳过
+3. 未发送则生成多机汇总日报并发送，落盘 `last_report_date`
+
+> 触发使用 `>=` 而非 `==`，避免 cron 延迟导致漏报；当天只发一次
+
+### 6.5 多实例与限流
+
+- 实例间 `sleep 1s`，避免触发阿里云 OpenAPI QPS 限流
+- 单台失败时单独发送 `[实例名] 实例处理异常` 告警
+- 日报汇总所有机器的运行/停止/异常数量
 
 ---
 
