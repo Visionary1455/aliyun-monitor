@@ -50,6 +50,7 @@ jobs:
           CDT_TRAFFIC_LIMIT_GB: ${{ secrets.CDT_TRAFFIC_LIMIT_GB }}
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_USER_OPEN_ID: ${{ secrets.FEISHU_USER_OPEN_ID }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
           INSTANCE_NAME: ${{ secrets.INSTANCE_NAME }}
           STATE_FILE: ${{ env.STATE_FILE }}
