@@ -93,8 +93,8 @@ def load_config():
 def get_feishu_access_token():
     """获取飞书应用 access_token"""
     # 使用正确的飞书应用配置
-    app_id = os.environ.get('FEISHU_APP_ID', 'cli_xxxxxxxxxxxx')
-    app_secret = os.environ.get('FEISHU_APP_SECRET', 'xxxxxxxxxxxxxxxx')
+    app_id = os.environ.get('FEISHU_APP_ID')
+    app_secret = os.environ.get('FEISHU_APP_SECRET')
 
     if not app_id or not app_secret:
         logger.warning("飞书配置缺失，跳过通知")
@@ -129,7 +129,7 @@ def send_feishu_message(title, message, color_status="green"):
     full_message = f"{icon} *{title}*\n\n{message}"
 
     # 从环境变量获取用户 open_id，如果没有则使用默认值
-    user_open_id = os.environ.get('FEISHU_USER_OPEN_ID', 'ou_xxxxxxxxxxxxxxxx')
+    user_open_id = os.environ.get('FEISHU_USER_OPEN_ID')
 
     try:
         url = "https://open.feishu.cn/open-apis/im/v1/messages"
