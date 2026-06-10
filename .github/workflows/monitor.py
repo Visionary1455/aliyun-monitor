@@ -419,57 +419,56 @@ def main():
         # 1. 执行监控（流量检查、实例启停）
         check_and_act(config, state)
 
-    # 2. 检查是否发送日报
-    report_hour = os.environ.get('REPORT_HOUR', '9')
-    current_hour = datetime.now().hour
+        # 2. 检查是否发送日报
+        report_hour = os.environ.get('REPORT_HOUR', '9')
+        current_hour = datetime.now().hour
 
-    try:
-        target_hours = [int(h.strip()) for h in report_hour.split(',')]
-    except ValueError:
-        target_hours = [9]
+        try:
+            target_hours = [int(h.strip()) for h in report_hour.split(',')]
+        except ValueError:
+            target_hours = [9]
 
-    if current_hour in target_hours:
-        # 检查是否已经发送过日报（每小时只发一次）
-        last_report = state.get('last_report_date', '')
-        today = datetime.now().strftime('%Y-%m-%d')
+        if current_hour in target_hours:
+            # 检查是否已经发送过日报（每小时只发一次）
+            last_report = state.get('last_report_date', '')
+            today = datetime.now().strftime('%Y-%m-%d')
 
-        if last_report != today:
-            logger.info("发送日报时间到，生成并发送日报...")
-            from aliyunsdkecs.request.v20140526.DescribeInstanceMonitorDataRequest import DescribeInstanceMonitorDataRequest
+            if last_report != today:
+                logger.info("发送日报时间到，生成并发送日报...")
 
-            # 生成日报并发送
-            try:
-                client = AcsClient(config['ak'], config['sk'], config['region'])
+                # 生成日报并发送
+                try:
+                    client = AcsClient(config['ak'], config['sk'], config['region'])
 
-                # 获取实例信息
-                instance_info = get_instance_info_for_report(client, config['instance_id'])
+                    # 获取实例信息
+                    instance_info = get_instance_info_for_report(client, config['instance_id'])
 
-                # 获取流量
-                curr_gb = get_cdt_traffic(config['ak'], config['sk'], config['region']) or 0
+                    # 获取流量
+                    curr_gb = get_cdt_traffic(config['ak'], config['sk'], config['region']) or 0
 
-                # 构建日报内容
-                lines = []
-                lines.append(f"实例名称: {config['name']}")
-                lines.append(f"实例ID: {config['instance_id']}")
-                lines.append(f"实例状态: {'运行中' if instance_info.get('status') == 'Running' else '已停止'}")
-                lines.append(f"流量使用: {curr_gb:.2f}GB / {config['traffic_limit']}GB")
-                lines.append(f"报表生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    # 构建日报内容
+                    lines = []
+                    lines.append(f"实例名称: {config['name']}")
+                    lines.append(f"实例ID: {config['instance_id']}")
+                    lines.append(f"实例状态: {'运行中' if instance_info.get('status') == 'Running' else '已停止'}")
+                    lines.append(f"流量使用: {curr_gb:.2f}GB / {config['traffic_limit']}GB")
+                    lines.append(f"报表生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-                title = f"📊 {config['name']} 日报 - {today}"
-                send_feishu_message(title, '\n'.join(lines), "green")
+                    title = f"📊 {config['name']} 日报 - {today}"
+                    send_feishu_message(title, '\n'.join(lines), "green")
 
-                # 记录已发送
-                state['last_report_date'] = today
-                logger.info("日报发送成功")
-            except Exception as e:
-                logger.error(f"日报发送失败: {e}")
+                    # 记录已发送
+                    state['last_report_date'] = today
+                    logger.info("日报发送成功")
+                except Exception as e:
+                    logger.error(f"日报发送失败: {e}")
+
+        # 保存状态
+        save_state(state)
 
     except Exception as e:
         logger.error(f"监控执行失败: {e}")
         send_feishu_alert("监控执行失败", f"错误信息: {str(e)}", "red")
-
-    # 保存状态
-    save_state(state)
 
     logger.info("监控完成")
 
