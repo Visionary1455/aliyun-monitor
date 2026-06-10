@@ -125,8 +125,9 @@ def send_feishu_message(title, message, color_status="green"):
         logger.warning("无法获取飞书 access_token")
         return
 
-    icon = "✅" if color_status == "green" else "⚠️"
-    full_message = f"{icon} *{title}*\n\n{message}"
+    icons = {"green": "✅", "red": "🔴", "orange": "⚠️", "blue": "📊"}
+    icon = icons.get(color_status, "ℹ️")
+    full_message = f"{icon} {title}\n{'─' * 20}\n{message}"
 
     # 从环境变量获取用户 open_id，如果没有则使用默认值
     user_open_id = os.environ.get('FEISHU_USER_OPEN_ID')
@@ -164,6 +165,35 @@ def send_feishu_message(title, message, color_status="green"):
 def send_feishu_alert(title, message, color_status="green"):
     """发送飞书告警"""
     send_feishu_message(title, message, color_status)
+
+
+def build_message(config, curr_gb=None, status_text=None, extra_lines=None):
+    """构建统一格式的消息体"""
+    lines = []
+    lines.append(f"实例名称: {config.get('name', '-')}")
+    lines.append(f"实例ID:   {config.get('instance_id', '-')}")
+    if status_text is not None:
+        lines.append(f"实例状态: {status_text}")
+    if curr_gb is not None:
+        limit = config.get('traffic_limit', 0)
+        lines.append(f"流量使用: {curr_gb:.2f}GB / {limit}GB")
+    if extra_lines:
+        lines.append("─" * 20)
+        lines.extend(extra_lines)
+    lines.append(f"时间:     {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    return '\n'.join(lines)
+
+
+STATUS_MAP = {
+    'Running': '运行中 🟢',
+    'Stopped': '已停止 ⚪',
+    'Starting': '启动中 🟡',
+    'Stopping': '停止中 🟡',
+}
+
+
+def status_label(status):
+    return STATUS_MAP.get(status, status or '未知')
 
 # ---------- 状态缓存 ----------
 def load_state():
@@ -313,7 +343,11 @@ def check_and_act(config, state):
     if curr_gb is None:
         logger.error("无法获取流量数据")
         if can_notify(state, instance_id, 'query_failed'):
-            send_feishu_alert("流量查询失败", "无法获取 CDT 流量数据", "red")
+            send_feishu_alert(
+                "流量查询失败",
+                build_message(config, extra_lines=["原因: 无法获取 CDT 流量数据"]),
+                "red",
+            )
             mark_notified(state, instance_id, 'query_failed')
         return
 
@@ -357,18 +391,33 @@ def check_and_act(config, state):
                 if started:
                     logger.info("实例已启动")
                     if can_notify(state, instance_id, 'resumed'):
-                        send_feishu_alert("实例已启动", f"流量: {curr_gb:.2f}GB\n状态: 运行中", "green")
+                        send_feishu_alert(
+                            "实例已自动启动",
+                            build_message(config, curr_gb, status_label("Running"),
+                                          extra_lines=["触发原因: 流量低于阈值，恢复服务"]),
+                            "green",
+                        )
                         mark_notified(state, instance_id, 'resumed')
                 else:
                     logger.warning("启动超时")
                     if can_notify(state, instance_id, 'start_failed'):
-                        send_feishu_alert("启动失败", f"流量: {curr_gb:.2f}GB\n启动超时", "red")
+                        send_feishu_alert(
+                            "实例启动失败",
+                            build_message(config, curr_gb, status_label(get_instance_status(client, instance_id)),
+                                          extra_lines=["原因: 启动超时（120秒未变为 Running）"]),
+                            "red",
+                        )
                         mark_notified(state, instance_id, 'start_failed')
 
             except Exception as e:
                 logger.error(f"启动实例失败: {e}")
                 if can_notify(state, instance_id, 'start_failed'):
-                    send_feishu_alert("启动失败", f"流量: {curr_gb:.2f}GB\n错误: {str(e)}", "red")
+                    send_feishu_alert(
+                        "实例启动失败",
+                        build_message(config, curr_gb, status_label(status),
+                                      extra_lines=[f"错误: {str(e)}"]),
+                        "red",
+                    )
                     mark_notified(state, instance_id, 'start_failed')
 
         elif status == "Running":
@@ -387,19 +436,34 @@ def check_and_act(config, state):
                 logger.info("实例已停止")
 
                 if can_notify(state, instance_id, 'overlimit', OVERLIMIT_COOLDOWN):
-                    send_feishu_alert("流量超标已关机", f"当前流量: {curr_gb:.2f}GB\n阈值: {limit}GB\n已执行关机", "red")
+                    send_feishu_alert(
+                        "流量超标已关机",
+                        build_message(config, curr_gb, status_label("Stopped"),
+                                      extra_lines=["触发原因: 流量达到阈值，已自动关机"]),
+                        "red",
+                    )
                     mark_notified(state, instance_id, 'overlimit')
 
             except Exception as e:
                 logger.error(f"停止实例失败: {e}")
                 if can_notify(state, instance_id, 'stop_failed'):
-                    send_feishu_alert("关机失败", f"流量: {curr_gb:.2f}GB\n错误: {str(e)}", "red")
+                    send_feishu_alert(
+                        "实例关机失败",
+                        build_message(config, curr_gb, status_label(status),
+                                      extra_lines=[f"错误: {str(e)}"]),
+                        "red",
+                    )
                     mark_notified(state, instance_id, 'stop_failed')
 
         else:
             logger.info(f"已停止 - 流量: {curr_gb:.2f}GB")
             if can_notify(state, instance_id, 'overlimit', OVERLIMIT_COOLDOWN):
-                send_feishu_alert("流量超标提醒", f"当前流量: {curr_gb:.2f}GB\n阈值: {limit}GB\n状态: 已保持关机", "orange")
+                send_feishu_alert(
+                    "流量超标提醒",
+                    build_message(config, curr_gb, status_label(status),
+                                  extra_lines=["说明: 流量已超标，保持关机状态"]),
+                    "orange",
+                )
                 mark_notified(state, instance_id, 'overlimit')
 
 
@@ -449,16 +513,21 @@ def main():
                     # 获取流量
                     curr_gb = get_cdt_traffic(config['ak'], config['sk'], config['region']) or 0
 
-                    # 构建日报内容
-                    lines = []
-                    lines.append(f"实例名称: {config['name']}")
-                    lines.append(f"实例ID: {config['instance_id']}")
-                    lines.append(f"实例状态: {'运行中' if instance_info.get('status') == 'Running' else '已停止'}")
-                    lines.append(f"流量使用: {curr_gb:.2f}GB / {config['traffic_limit']}GB")
-                    lines.append(f"报表生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    extra = []
+                    if instance_info.get('cpu'):
+                        extra.append(f"CPU/内存:  {instance_info.get('cpu')} vCPU / {instance_info.get('memory')} MB")
+                    if instance_info.get('ip'):
+                        extra.append(f"内网IP:    {instance_info.get('ip')}")
+                    extra.append(f"报表日期:  {today}")
 
-                    title = f"📊 {config['name']} 日报 - {today}"
-                    send_feishu_message(title, '\n'.join(lines), "green")
+                    title = f"每日运行日报"
+                    body = build_message(
+                        config,
+                        curr_gb,
+                        status_label(instance_info.get('status')),
+                        extra_lines=extra,
+                    )
+                    send_feishu_message(title, body, "blue")
 
                     # 记录已发送
                     state['last_report_date'] = today
