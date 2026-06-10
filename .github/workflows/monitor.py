@@ -229,11 +229,14 @@ def get_instance_info_for_report(client, instance_id):
         instances = data.get("Instances", {}).get("Instance", [])
         if instances:
             inst = instances[0]
+            # PrivateIpAddress 是 {"IpAddress": ["x.x.x.x"]} 结构
+            private_ip_obj = inst.get('VpcAttributes', {}).get('PrivateIpAddress', {})
+            private_ips = private_ip_obj.get('IpAddress', []) if isinstance(private_ip_obj, dict) else []
             return {
                 'status': inst.get('Status'),
                 'cpu': inst.get('Cpu'),
                 'memory': inst.get('Memory'),
-                'ip': inst.get('VpcAttributes', {}).get('PrivateIpAddress', [''])[0],
+                'ip': private_ips[0] if private_ips else '',
             }
         return {}
     except Exception as e:
