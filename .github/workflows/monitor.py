@@ -11,7 +11,7 @@ import json
 import time
 import logging
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from aliyunsdkcore.client import AcsClient
 from aliyunsdkcore.request import CommonRequest
 from aliyunsdkecs.request.v20140526.StartInstanceRequest import StartInstanceRequest
@@ -58,6 +58,14 @@ OVERLIMIT_COOLDOWN = 86400       # 流量超标 24 小时冷却
 # 启动配置
 START_WAIT_TIMEOUT = 120         # 等待启动超时(秒)
 START_POLL_INTERVAL = 10         # 轮询间隔(秒)
+
+# 本地时区（北京时间），用于报表时间显示与日报触发判断
+LOCAL_TZ = timezone(timedelta(hours=8))
+
+
+def now_local():
+    """返回带时区的本地时间（北京时间）"""
+    return datetime.now(LOCAL_TZ)
 
 # ---------- 配置加载 ----------
 def _expand(value, n, default='', field=''):
@@ -156,6 +164,12 @@ def get_feishu_access_token():
 
 def send_feishu_message(title, message, color_status="green"):
     """发送飞书消息给用户"""
+    # 先校验 OPEN_ID，避免 receive_id=None 调用 API
+    user_open_id = os.environ.get('FEISHU_USER_OPEN_ID')
+    if not user_open_id:
+        logger.warning(f"FEISHU_USER_OPEN_ID 未配置，跳过消息: {title}")
+        return
+
     access_token, app_id = get_feishu_access_token()
     if not access_token:
         logger.warning("无法获取飞书 access_token")
@@ -164,9 +178,6 @@ def send_feishu_message(title, message, color_status="green"):
     icons = {"green": "✅", "red": "🔴", "orange": "⚠️", "blue": "📊"}
     icon = icons.get(color_status, "ℹ️")
     full_message = f"{icon} {title}\n{'─' * 20}\n{message}"
-
-    # 从环境变量获取用户 open_id，如果没有则使用默认值
-    user_open_id = os.environ.get('FEISHU_USER_OPEN_ID')
 
     try:
         url = "https://open.feishu.cn/open-apis/im/v1/messages"
@@ -216,7 +227,7 @@ def build_message(config, curr_gb=None, status_text=None, extra_lines=None):
     if extra_lines:
         lines.append("─" * 20)
         lines.extend(extra_lines)
-    lines.append(f"时间:     {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"时间:     {now_local().strftime('%Y-%m-%d %H:%M:%S')}")
     return '\n'.join(lines)
 
 
@@ -519,7 +530,7 @@ def check_and_act(config, state):
 
 def send_daily_report(instances, results, state):
     """发送多机汇总日报。results: list of (config, curr_gb, status)"""
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = now_local().strftime('%Y-%m-%d')
 
     lines = [f"📅 日期: {today}", ""]
     running = stopped = unknown = 0
@@ -539,7 +550,7 @@ def send_daily_report(instances, results, state):
     lines.append(f"─────────────────")
     lines.append(f"共 {len(results)} 台 · 运行 {running} · 停止 {stopped}" +
                  (f" · 异常 {unknown}" if unknown else ""))
-    lines.append(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"时间: {now_local().strftime('%Y-%m-%d %H:%M:%S')}")
 
     send_feishu_message(f"每日运行日报 - {today}", '\n'.join(lines), "blue")
     state['last_report_date'] = today
@@ -594,9 +605,9 @@ def main():
         except ValueError:
             target_hours = [9]
 
-        current_hour = datetime.now().hour
+        current_hour = now_local().hour
         if current_hour in target_hours:
-            today = datetime.now().strftime('%Y-%m-%d')
+            today = now_local().strftime('%Y-%m-%d')
             if state.get('last_report_date') != today:
                 logger.info("发送日报时间到，生成并发送日报...")
                 send_daily_report(instances, results, state)
