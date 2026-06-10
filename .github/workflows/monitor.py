@@ -596,6 +596,9 @@ def main():
         finally:
             # 每台处理完立即落盘，避免单台失败丢失前面状态
             save_state(state)
+            # 多机串行处理，避免触发阿里云 OpenAPI QPS 限流
+            if idx < len(instances):
+                time.sleep(1)
 
     # 2. 日报（独立 try/except，不影响监控结果）
     try:
@@ -606,12 +609,13 @@ def main():
             target_hours = [9]
 
         current_hour = now_local().hour
-        if current_hour in target_hours:
-            today = now_local().strftime('%Y-%m-%d')
-            if state.get('last_report_date') != today:
-                logger.info("发送日报时间到，生成并发送日报...")
-                send_daily_report(instances, results, state)
-                save_state(state)
+        today = now_local().strftime('%Y-%m-%d')
+        # 触发条件放宽：当前小时 >= 最早 report_hour 且当天未发，避免 cron 延迟导致漏报
+        min_target_hour = min(target_hours)
+        if current_hour >= min_target_hour and state.get('last_report_date') != today:
+            logger.info(f"发送日报时间到 (current_hour={current_hour}, target>={min_target_hour}), 生成并发送日报...")
+            send_daily_report(instances, results, state)
+            save_state(state)
     except Exception as e:
         logger.exception(f"日报发送失败: {e}")
 
