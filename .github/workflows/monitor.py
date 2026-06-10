@@ -11,7 +11,7 @@ import json
 import time
 import logging
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from aliyunsdkcore.client import AcsClient
 from aliyunsdkcore.request import CommonRequest
 from aliyunsdkecs.request.v20140526.StartInstanceRequest import StartInstanceRequest
@@ -59,35 +59,79 @@ OVERLIMIT_COOLDOWN = 86400       # 流量超标 24 小时冷却
 START_WAIT_TIMEOUT = 120         # 等待启动超时(秒)
 START_POLL_INTERVAL = 10         # 轮询间隔(秒)
 
-# ---------- 配置加载 ----------
-def load_config():
-    """从环境变量加载配置"""
-    required = [
-        'ALIYUN_ACCESS_KEY_ID',
-        'ALIYUN_ACCESS_KEY_SECRET',
-        'ALIYUN_REGION',
-        'ECS_INSTANCE_ID',
-    ]
-    missing = []
-    for var in required:
-        if not os.environ.get(var):
-            missing.append(var)
+# 本地时区（北京时间），用于报表时间显示与日报触发判断
+LOCAL_TZ = timezone(timedelta(hours=8))
 
-    if missing:
-        logger.error(f"缺少必需环境变量: {', '.join(missing)}")
+
+def now_local():
+    """返回带时区的本地时间（北京时间）"""
+    return datetime.now(LOCAL_TZ)
+
+# ---------- 配置加载 ----------
+def _expand(value, n, default='', field=''):
+    """
+    展开逗号分隔字段：
+    - 1 个值：所有实例共享
+    - N 个值：按位置一一对应
+    - 其他：报错（避免静默错位）
+    """
+    if value is None or value == '':
+        return [default] * n
+    parts = [v.strip() for v in str(value).split(',')]
+    if len(parts) == 1:
+        return parts * n
+    if len(parts) == n:
+        return parts
+    raise ValueError(
+        f"{field} 数量不匹配：实例数={n}，{field} 配置数={len(parts)}，应为 1（共享）或 {n}（一一对应）"
+    )
+
+
+def load_instances():
+    """加载多实例配置（逗号分隔，按位置对齐）。返回 list[dict] 或 None。"""
+    raw_ids = os.environ.get('ECS_INSTANCE_ID', '')
+    if not raw_ids.strip():
+        logger.error("缺少必需环境变量: ECS_INSTANCE_ID")
         return None
 
-    return {
-        'ak': os.environ.get('ALIYUN_ACCESS_KEY_ID'),
-        'sk': os.environ.get('ALIYUN_ACCESS_KEY_SECRET'),
-        'region': os.environ.get('ALIYUN_REGION'),
-        'instance_id': os.environ.get('ECS_INSTANCE_ID'),
-        'traffic_limit': int(os.environ.get('CDT_TRAFFIC_LIMIT_GB', '180')),
-        'feishu_app_id': os.environ.get('FEISHU_APP_ID'),
-        'feishu_app_secret': os.environ.get('FEISHU_APP_SECRET'),
-        'feishu_chat_id': os.environ.get('FEISHU_CHAT_ID'),
-        'name': os.environ.get('INSTANCE_NAME', 'ECS-Monitor'),
-    }
+    ids = [x.strip() for x in raw_ids.split(',') if x.strip()]
+    n = len(ids)
+    if n == 0:
+        logger.error("ECS_INSTANCE_ID 为空")
+        return None
+
+    try:
+        aks     = _expand(os.environ.get('ALIYUN_ACCESS_KEY_ID'),     n, field='ALIYUN_ACCESS_KEY_ID')
+        sks     = _expand(os.environ.get('ALIYUN_ACCESS_KEY_SECRET'), n, field='ALIYUN_ACCESS_KEY_SECRET')
+        regions = _expand(os.environ.get('ALIYUN_REGION'),            n, field='ALIYUN_REGION')
+        limits  = _expand(os.environ.get('CDT_TRAFFIC_LIMIT_GB', '180'), n, '180', field='CDT_TRAFFIC_LIMIT_GB')
+        names   = _expand(os.environ.get('INSTANCE_NAME', ''),        n, '', field='INSTANCE_NAME')
+    except ValueError as e:
+        logger.error(f"配置错误: {e}")
+        return None
+
+    # 校验必填
+    for i in range(n):
+        if not aks[i] or not sks[i] or not regions[i]:
+            logger.error(f"第 {i+1} 台实例 {ids[i]} 缺少 AK/SK/REGION 配置")
+            return None
+
+    instances = []
+    for i in range(n):
+        try:
+            limit_val = float(limits[i])
+        except ValueError:
+            logger.error(f"第 {i+1} 台实例 {ids[i]} 的 LIMIT 不是有效数字: {limits[i]}")
+            return None
+        instances.append({
+            'ak': aks[i],
+            'sk': sks[i],
+            'region': regions[i],
+            'instance_id': ids[i],
+            'traffic_limit': limit_val,
+            'name': names[i] or f'ECS-{i+1}',
+        })
+    return instances
 
 # ---------- 飞书通知 ----------
 def get_feishu_access_token():
@@ -120,6 +164,12 @@ def get_feishu_access_token():
 
 def send_feishu_message(title, message, color_status="green"):
     """发送飞书消息给用户"""
+    # 先校验 OPEN_ID，避免 receive_id=None 调用 API
+    user_open_id = os.environ.get('FEISHU_USER_OPEN_ID')
+    if not user_open_id:
+        logger.warning(f"FEISHU_USER_OPEN_ID 未配置，跳过消息: {title}")
+        return
+
     access_token, app_id = get_feishu_access_token()
     if not access_token:
         logger.warning("无法获取飞书 access_token")
@@ -128,9 +178,6 @@ def send_feishu_message(title, message, color_status="green"):
     icons = {"green": "✅", "red": "🔴", "orange": "⚠️", "blue": "📊"}
     icon = icons.get(color_status, "ℹ️")
     full_message = f"{icon} {title}\n{'─' * 20}\n{message}"
-
-    # 从环境变量获取用户 open_id，如果没有则使用默认值
-    user_open_id = os.environ.get('FEISHU_USER_OPEN_ID')
 
     try:
         url = "https://open.feishu.cn/open-apis/im/v1/messages"
@@ -180,7 +227,7 @@ def build_message(config, curr_gb=None, status_text=None, extra_lines=None):
     if extra_lines:
         lines.append("─" * 20)
         lines.extend(extra_lines)
-    lines.append(f"时间:     {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"时间:     {now_local().strftime('%Y-%m-%d %H:%M:%S')}")
     return '\n'.join(lines)
 
 
@@ -321,8 +368,15 @@ def get_cdt_traffic(ak, sk, region):
         return None
 
 # ---------- 核心逻辑 ----------
+def _alert(config, title, *args, **kwargs):
+    """带机器名前缀的告警"""
+    name = config.get('name', '')
+    full_title = f"[{name}] {title}" if name else title
+    send_feishu_alert(full_title, *args, **kwargs)
+
+
 def check_and_act(config, state):
-    """检查并执行操作"""
+    """检查并执行操作。返回 (curr_gb, status) 供日报使用"""
     ak = config['ak']
     sk = config['sk']
     region = config['region']
@@ -331,11 +385,7 @@ def check_and_act(config, state):
     limit = config['traffic_limit']
 
     # 创建阿里云客户端
-    try:
-        client = AcsClient(ak, sk, region)
-    except Exception as e:
-        logger.error(f"创建阿里云客户端失败: {e}")
-        return
+    client = AcsClient(ak, sk, region)
 
     # 1. 获取流量
     logger.info("查询 CDT 流量...")
@@ -343,13 +393,13 @@ def check_and_act(config, state):
     if curr_gb is None:
         logger.error("无法获取流量数据")
         if can_notify(state, instance_id, 'query_failed'):
-            send_feishu_alert(
+            _alert(config,
                 "流量查询失败",
                 build_message(config, extra_lines=["原因: 无法获取 CDT 流量数据"]),
                 "red",
             )
             mark_notified(state, instance_id, 'query_failed')
-        return
+        return None, None
 
     logger.info(f"当前流量: {curr_gb:.2f} GB, 阈值: {limit} GB")
 
@@ -359,7 +409,14 @@ def check_and_act(config, state):
 
     if status is None:
         logger.error("无法获取实例状态")
-        return
+        if can_notify(state, instance_id, 'status_failed'):
+            _alert(config,
+                "无法获取实例状态",
+                build_message(config, curr_gb, extra_lines=["原因: 实例不存在或 AK/SK 无权限"]),
+                "red",
+            )
+            mark_notified(state, instance_id, 'status_failed')
+        return curr_gb, None
 
     # 3. 决策逻辑
     if curr_gb < limit:
@@ -383,6 +440,7 @@ def check_and_act(config, state):
 
                     if real_status == "Running":
                         started = True
+                        status = "Running"
                         break
                     elif real_status == "Stopped":
                         logger.warning("启动被拒绝，可能资源不足")
@@ -391,7 +449,7 @@ def check_and_act(config, state):
                 if started:
                     logger.info("实例已启动")
                     if can_notify(state, instance_id, 'resumed'):
-                        send_feishu_alert(
+                        _alert(config,
                             "实例已自动启动",
                             build_message(config, curr_gb, status_label("Running"),
                                           extra_lines=["触发原因: 流量低于阈值，恢复服务"]),
@@ -401,7 +459,7 @@ def check_and_act(config, state):
                 else:
                     logger.warning("启动超时")
                     if can_notify(state, instance_id, 'start_failed'):
-                        send_feishu_alert(
+                        _alert(config,
                             "实例启动失败",
                             build_message(config, curr_gb, status_label(get_instance_status(client, instance_id)),
                                           extra_lines=["原因: 启动超时（120秒未变为 Running）"]),
@@ -412,7 +470,7 @@ def check_and_act(config, state):
             except Exception as e:
                 logger.error(f"启动实例失败: {e}")
                 if can_notify(state, instance_id, 'start_failed'):
-                    send_feishu_alert(
+                    _alert(config,
                         "实例启动失败",
                         build_message(config, curr_gb, status_label(status),
                                       extra_lines=[f"错误: {str(e)}"]),
@@ -434,9 +492,10 @@ def check_and_act(config, state):
                 stop_req.set_InstanceId(instance_id)
                 client.do_action_with_exception(stop_req)
                 logger.info("实例已停止")
+                status = "Stopped"
 
                 if can_notify(state, instance_id, 'overlimit', OVERLIMIT_COOLDOWN):
-                    send_feishu_alert(
+                    _alert(config,
                         "流量超标已关机",
                         build_message(config, curr_gb, status_label("Stopped"),
                                       extra_lines=["触发原因: 流量达到阈值，已自动关机"]),
@@ -447,7 +506,7 @@ def check_and_act(config, state):
             except Exception as e:
                 logger.error(f"停止实例失败: {e}")
                 if can_notify(state, instance_id, 'stop_failed'):
-                    send_feishu_alert(
+                    _alert(config,
                         "实例关机失败",
                         build_message(config, curr_gb, status_label(status),
                                       extra_lines=[f"错误: {str(e)}"]),
@@ -458,7 +517,7 @@ def check_and_act(config, state):
         else:
             logger.info(f"已停止 - 流量: {curr_gb:.2f}GB")
             if can_notify(state, instance_id, 'overlimit', OVERLIMIT_COOLDOWN):
-                send_feishu_alert(
+                _alert(config,
                     "流量超标提醒",
                     build_message(config, curr_gb, status_label(status),
                                   extra_lines=["说明: 流量已超标，保持关机状态"]),
@@ -466,83 +525,103 @@ def check_and_act(config, state):
                 )
                 mark_notified(state, instance_id, 'overlimit')
 
+    return curr_gb, status
+
+
+def send_daily_report(instances, results, state):
+    """发送多机汇总日报。results: list of (config, curr_gb, status)"""
+    today = now_local().strftime('%Y-%m-%d')
+
+    lines = [f"📅 日期: {today}", ""]
+    running = stopped = unknown = 0
+    for idx, (cfg, curr_gb, status) in enumerate(results, 1):
+        if status == 'Running':
+            icon, running = '🟢', running + 1
+        elif status == 'Stopped':
+            icon, stopped = '⚪', stopped + 1
+        else:
+            icon, unknown = '⚠️', unknown + 1
+
+        gb_text = f"{curr_gb:.2f}" if curr_gb is not None else '?'
+        limit = cfg.get('traffic_limit', 0)
+        lines.append(f"[{idx}] {cfg['name']}  {icon}  {gb_text} / {limit} GB")
+
+    lines.append("")
+    lines.append(f"─────────────────")
+    lines.append(f"共 {len(results)} 台 · 运行 {running} · 停止 {stopped}" +
+                 (f" · 异常 {unknown}" if unknown else ""))
+    lines.append(f"时间: {now_local().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    send_feishu_message(f"每日运行日报 - {today}", '\n'.join(lines), "blue")
+    state['last_report_date'] = today
+    logger.info("日报发送成功")
+
 
 def main():
     logger.info("=" * 50)
     logger.info("阿里云 ECS 监控开始")
     logger.info("=" * 50)
 
+    # 加载多实例配置
+    instances = load_instances()
+    if not instances:
+        send_feishu_alert("监控错误", "配置加载失败，请检查 Secrets 配置", "red")
+        sys.exit(1)
+
+    logger.info(f"共 {len(instances)} 台实例待处理")
+
+    # 加载状态
+    state = load_state()
+
+    # 1. 逐台执行（独立 try/except，故障隔离）
+    results = []  # [(config, curr_gb, status)]
+    fail_count = 0
+    for idx, inst in enumerate(instances, 1):
+        logger.info(f"========== [{idx}/{len(instances)}] {inst['name']} ({inst['instance_id']}) ==========")
+        try:
+            curr_gb, status = check_and_act(inst, state)
+            results.append((inst, curr_gb, status))
+        except Exception as e:
+            fail_count += 1
+            logger.exception(f"[{inst['name']}] 处理失败")
+            results.append((inst, None, None))
+            try:
+                send_feishu_alert(
+                    f"[{inst['name']}] 实例处理异常",
+                    build_message(inst, extra_lines=[f"错误: {str(e)}"]),
+                    "red",
+                )
+            except Exception:
+                logger.exception("飞书告警发送也失败")
+        finally:
+            # 每台处理完立即落盘，避免单台失败丢失前面状态
+            save_state(state)
+            # 多机串行处理，避免触发阿里云 OpenAPI QPS 限流
+            if idx < len(instances):
+                time.sleep(1)
+
+    # 2. 日报（独立 try/except，不影响监控结果）
     try:
-        # 加载配置
-        config = load_config()
-        if not config:
-            logger.error("配置加载失败")
-            send_feishu_alert("监控错误", "配置加载失败，请检查 Secrets 配置", "red")
-            return
-
-        # 加载状态
-        state = load_state()
-
-        # 1. 执行监控（流量检查、实例启停）
-        check_and_act(config, state)
-
-        # 2. 检查是否发送日报
         report_hour = os.environ.get('REPORT_HOUR', '9')
-        current_hour = datetime.now().hour
-
         try:
             target_hours = [int(h.strip()) for h in report_hour.split(',')]
         except ValueError:
             target_hours = [9]
 
-        if current_hour in target_hours:
-            # 检查是否已经发送过日报（每小时只发一次）
-            last_report = state.get('last_report_date', '')
-            today = datetime.now().strftime('%Y-%m-%d')
-
-            if last_report != today:
-                logger.info("发送日报时间到，生成并发送日报...")
-
-                # 生成日报并发送
-                try:
-                    client = AcsClient(config['ak'], config['sk'], config['region'])
-
-                    # 获取实例信息
-                    instance_info = get_instance_info_for_report(client, config['instance_id'])
-
-                    # 获取流量
-                    curr_gb = get_cdt_traffic(config['ak'], config['sk'], config['region']) or 0
-
-                    extra = []
-                    if instance_info.get('cpu'):
-                        extra.append(f"CPU/内存:  {instance_info.get('cpu')} vCPU / {instance_info.get('memory')} MB")
-                    if instance_info.get('ip'):
-                        extra.append(f"内网IP:    {instance_info.get('ip')}")
-                    extra.append(f"报表日期:  {today}")
-
-                    title = f"每日运行日报"
-                    body = build_message(
-                        config,
-                        curr_gb,
-                        status_label(instance_info.get('status')),
-                        extra_lines=extra,
-                    )
-                    send_feishu_message(title, body, "blue")
-
-                    # 记录已发送
-                    state['last_report_date'] = today
-                    logger.info("日报发送成功")
-                except Exception as e:
-                    logger.error(f"日报发送失败: {e}")
-
-        # 保存状态
-        save_state(state)
-
+        current_hour = now_local().hour
+        today = now_local().strftime('%Y-%m-%d')
+        # 触发条件放宽：当前小时 >= 最早 report_hour 且当天未发，避免 cron 延迟导致漏报
+        min_target_hour = min(target_hours)
+        if current_hour >= min_target_hour and state.get('last_report_date') != today:
+            logger.info(f"发送日报时间到 (current_hour={current_hour}, target>={min_target_hour}), 生成并发送日报...")
+            send_daily_report(instances, results, state)
+            save_state(state)
     except Exception as e:
-        logger.error(f"监控执行失败: {e}")
-        send_feishu_alert("监控执行失败", f"错误信息: {str(e)}", "red")
+        logger.exception(f"日报发送失败: {e}")
 
-    logger.info("监控完成")
+    logger.info(f"监控完成: 成功 {len(instances)-fail_count}/{len(instances)}")
+    if fail_count > 0:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -38,8 +38,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.state
-          key: monitor-state-${{ secrets.ECS_INSTANCE_ID }}
-          restore-keys: monitor-state-
+          key: monitor-state-v1
 
       - name: Run monitor
         env:
