@@ -334,12 +334,42 @@ https://github.com/hizzt/aliyun-monitor
 
 ## 十、可选：Cloudflare Workers Cron 精确调度
 
-GitHub Actions `schedule` 是 **best-effort**，实际间隔常达 1-4 小时甚至跳过。
-如果需要精确 5 分钟级响应，可以在 Cloudflare Workers 部署一个免费 Cron 触发器：
+> ⚠️ **本节是可选项**。仅依赖 GitHub Actions schedule 也能完整运行，不影响功能；
+> 仅当你需要 **5 分钟级别响应** 时再考虑接入。
 
-- 完全免费（占用 Free 配额 0.3%）
-- 精度 < 15 秒
-- 部署 10 分钟搞定
-- `monitor.py` 无需任何改动
+### 为什么需要 CF Workers？
 
-详见 [`cf-worker/README.md`](./cf-worker/README.md) 部署指南。
+GitHub Actions 的 `schedule` 触发是 **best-effort（尽力而为）**，并非精确调度：
+
+| 期望 | 实际表现 |
+|------|---------|
+| `*/5 * * * *`（5 分钟一次） | 真实间隔 80~250 分钟，偶尔跳过 |
+
+GitHub 官方文档明确说明 schedule 会在全球高负载时延迟或跳过。Cloudflare Workers Cron 是付费基础设施，**精度 < 15 秒**，免费即可用。
+
+```
+原方案：       GitHub schedule (1-4 小时延迟)
+            ↓
+精确方案：     Cloudflare Workers Cron (精确 5 分钟) → GitHub workflow_dispatch
+```
+
+### 接入收益
+
+- ✅ 精度从「1-4 小时」提升到「< 15 秒」
+- ✅ 完全免费（占用 CF Free 配额约 0.3%）
+- ✅ `monitor.py` / `monitor.yml` **零改动**，纯外部触发器
+- ✅ GitHub schedule 保留作为兜底，CF 故障时自动降级
+
+### 怎么用？
+
+1. **创建 GitHub PAT**：fine-grained token，仅勾选目标仓库 + `Actions: Read and write`
+2. **在 Cloudflare Dashboard 部署 Worker**：粘贴 [`cf-worker/worker.js`](./cf-worker/worker.js) → 配置 Secret/Variable → 添加 Cron Trigger `*/5 * * * *`
+3. **验证**：观察 GitHub Actions 列表是否每 5 分钟出现新的 `workflow_dispatch` run
+
+详细分步说明、安全配置、故障排查见 [`cf-worker/README.md`](./cf-worker/README.md)。
+
+### 不想接入也完全没问题
+
+- 业务逻辑（流量监控、自动启停、飞书告警）100% 在 GitHub Actions 内部跑
+- GitHub schedule 即便延迟到 1-4 小时一次，对**24 小时尺度的流量监控**也够用
+- 仅在你对实时性有高要求（如分钟级超额止损）时才需要 CF
