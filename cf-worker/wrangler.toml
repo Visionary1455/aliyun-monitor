@@ -1,4 +1,4 @@
-name = "aliyun-monitor-trigger"
+name = "gh-workflow-dispatcher"
 main = "worker.js"
 compatibility_date = "2026-01-01"
 
@@ -6,12 +6,15 @@ compatibility_date = "2026-01-01"
 [triggers]
 crons = ["*/5 * * * *"]
 
-# 非敏感配置（可改）
-[vars]
-GH_REPO = "hizzt/aliyun-monitor"
-GH_REF = "main"
-GH_WORKFLOW = "monitor.yml"
-
-# 敏感配置请用 secrets:
-#   wrangler secret put GH_PAT
-#   wrangler secret put TRIGGER_TOKEN   # 可选，用于保护 /trigger HTTP 接口
+# 非敏感的默认值（也可不写，由 CF Dashboard Variables 覆盖）
+# 注意：本仓库为公开仓库，不要在此处写入任何与具体 GitHub 仓库相关的信息
+# 所有配置请通过 CF Dashboard 的 Variables / Secrets 设置：
+#
+#   Secrets   (Settings → Variables and Secrets → Secrets):
+#     GH_PAT          必填   GitHub fine-grained PAT，仅 Actions: read/write
+#     GH_REPO         必填   owner/repo，例如 myname/my-repo
+#     TRIGGER_TOKEN   可选   保护 /trigger HTTP 入口的口令
+#
+#   Variables (Settings → Variables and Secrets → Variables):
+#     GH_REF          可选   默认 main
+#     GH_WORKFLOW     可选   默认 monitor.yml
