@@ -329,3 +329,17 @@ A: 查看 Actions 日志确认具体错误，常见原因：Secrets 配置错误
 https://github.com/hizzt/aliyun-monitor
 
 如有问题欢迎提交 Issue！
+
+---
+
+## 十、可选：Cloudflare Workers Cron 精确调度
+
+GitHub Actions `schedule` 是 **best-effort**，实际间隔常达 1-4 小时甚至跳过。
+如果需要精确 5 分钟级响应，可以在 Cloudflare Workers 部署一个免费 Cron 触发器：
+
+- 完全免费（占用 Free 配额 0.3%）
+- 精度 < 15 秒
+- 部署 10 分钟搞定
+- `monitor.py` 无需任何改动
+
+详见 [`cf-worker/README.md`](./cf-worker/README.md) 部署指南。

@@ -1,0 +1,17 @@
+name = "aliyun-monitor-trigger"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# 每 5 分钟触发一次（按 UTC 解析，间隔类表达式与时区无关）
+[triggers]
+crons = ["*/5 * * * *"]
+
+# 非敏感配置（可改）
+[vars]
+GH_REPO = "hizzt/aliyun-monitor"
+GH_REF = "main"
+GH_WORKFLOW = "monitor.yml"
+
+# 敏感配置请用 secrets:
+#   wrangler secret put GH_PAT
+#   wrangler secret put TRIGGER_TOKEN   # 可选，用于保护 /trigger HTTP 接口
