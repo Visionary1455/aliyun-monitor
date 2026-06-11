@@ -230,9 +230,53 @@ curl -s "https://open.feishu.cn/open-api/im/v1/messages?receive_id_type=user_id&
 
 ---
 
-## 六、实现原理
+## 六、可选：Cloudflare Workers Cron 精确调度
 
-### 6.1 整体架构
+> ⚠️ **本节是可选项**。仅依赖 GitHub Actions schedule 也能完整运行，不影响功能；
+> 仅当你需要 **5 分钟级别响应** 时再考虑接入。
+
+### 6.1 为什么需要 CF Workers？
+
+GitHub Actions 的 `schedule` 触发是 **best-effort（尽力而为）**，并非精确调度：
+
+| 期望 | 实际表现 |
+|------|---------|
+| `*/5 * * * *`（5 分钟一次） | 真实间隔 80~250 分钟，偶尔跳过 |
+
+GitHub 官方文档明确说明 schedule 会在全球高负载时延迟或跳过。Cloudflare Workers Cron 是付费基础设施，**精度 < 15 秒**，免费即可用。
+
+```
+原方案：       GitHub schedule (1-4 小时延迟)
+            ↓
+精确方案：     Cloudflare Workers Cron (精确 5 分钟) → GitHub workflow_dispatch
+```
+
+### 6.2 接入收益
+
+- ✅ 精度从「1-4 小时」提升到「< 15 秒」
+- ✅ 完全免费（占用 CF Free 配额约 0.3%）
+- ✅ `monitor.py` / `monitor.yml` **零改动**，纯外部触发器
+- ✅ GitHub schedule 保留作为兜底，CF 故障时自动降级
+
+### 6.3 怎么用？
+
+1. **创建 GitHub PAT**：fine-grained token，仅勾选目标仓库 + `Actions: Read and write`
+2. **在 Cloudflare Dashboard 部署 Worker**：粘贴 [`cf-worker/worker.js`](./cf-worker/worker.js) → 配置 Secret/Variable → 添加 Cron Trigger `*/5 * * * *`
+3. **验证**：观察 GitHub Actions 列表是否每 5 分钟出现新的 `workflow_dispatch` run
+
+详细分步说明、安全配置、故障排查见 [`cf-worker/README.md`](./cf-worker/README.md)。
+
+### 6.4 不想接入也完全没问题
+
+- 业务逻辑（流量监控、自动启停、飞书告警）100% 在 GitHub Actions 内部跑
+- GitHub schedule 即便延迟到 1-4 小时一次，对**24 小时尺度的流量监控**也够用
+- 仅在你对实时性有高要求（如分钟级超额止损）时才需要 CF
+
+---
+
+## 七、实现原理
+
+### 7.1 整体架构
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -268,13 +312,13 @@ curl -s "https://open.feishu.cn/open-api/im/v1/messages?receive_id_type=user_id&
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 6.2 状态缓存机制
+### 7.2 状态缓存机制
 
 - 使用 `actions/cache` 保存状态文件（固定 key `monitor-state-v1`，自动覆盖）
 - 按 `instance_id` 维度记录每个事件上次通知时间戳（冷却机制）
 - 多实例每台独立 try/except + 落盘，单台失败不影响其它
 
-### 6.3 冷却时间
+### 7.3 冷却时间
 
 | 事件类型 | 冷却时间 |
 |----------|----------|
@@ -283,7 +327,7 @@ curl -s "https://open.feishu.cn/open-api/im/v1/messages?receive_id_type=user_id&
 | 恢复运行 | 1小时 |
 | 启动成功 | 1小时 |
 
-### 6.4 日报发送逻辑
+### 7.4 日报发送逻辑
 
 1. 每5分钟检查一次：当前小时（**北京时间 UTC+8**） >= `REPORT_HOUR` 中最早一项
 2. 检查 `last_report_date` 是否为今天，已发送则跳过
@@ -291,7 +335,7 @@ curl -s "https://open.feishu.cn/open-api/im/v1/messages?receive_id_type=user_id&
 
 > 触发使用 `>=` 而非 `==`，避免 cron 延迟导致漏报；当天只发一次
 
-### 6.5 多实例与限流
+### 7.5 多实例与限流
 
 - 实例间 `sleep 1s`，避免触发阿里云 OpenAPI QPS 限流
 - 单台失败时单独发送 `[实例名] 实例处理异常` 告警
@@ -299,7 +343,7 @@ curl -s "https://open.feishu.cn/open-api/im/v1/messages?receive_id_type=user_id&
 
 ---
 
-## 七、常见问题
+## 八、常见问题
 
 ### Q1: 启动实例时报错 "Operation denied"
 A: 检查 RAM 权限是否正确配置，确保有 `StartInstance` 权限
@@ -315,7 +359,7 @@ A: 查看 Actions 日志确认具体错误，常见原因：Secrets 配置错误
 
 ---
 
-## 八、注意事项
+## 九、注意事项
 
 1. **安全第一**：所有敏感信息（AccessKey、App Secret）必须存储在 GitHub Secrets 中，切勿硬编码
 2. **最小权限**：建议创建专用的 RAM 子用户，只授予必要的 API 权限
@@ -324,52 +368,8 @@ A: 查看 Actions 日志确认具体错误，常见原因：Secrets 配置错误
 
 ---
 
-## 九、仓库地址
+## 十、仓库地址
 
 https://github.com/hizzt/aliyun-monitor
 
 如有问题欢迎提交 Issue！
-
----
-
-## 十、可选：Cloudflare Workers Cron 精确调度
-
-> ⚠️ **本节是可选项**。仅依赖 GitHub Actions schedule 也能完整运行，不影响功能；
-> 仅当你需要 **5 分钟级别响应** 时再考虑接入。
-
-### 为什么需要 CF Workers？
-
-GitHub Actions 的 `schedule` 触发是 **best-effort（尽力而为）**，并非精确调度：
-
-| 期望 | 实际表现 |
-|------|---------|
-| `*/5 * * * *`（5 分钟一次） | 真实间隔 80~250 分钟，偶尔跳过 |
-
-GitHub 官方文档明确说明 schedule 会在全球高负载时延迟或跳过。Cloudflare Workers Cron 是付费基础设施，**精度 < 15 秒**，免费即可用。
-
-```
-原方案：       GitHub schedule (1-4 小时延迟)
-            ↓
-精确方案：     Cloudflare Workers Cron (精确 5 分钟) → GitHub workflow_dispatch
-```
-
-### 接入收益
-
-- ✅ 精度从「1-4 小时」提升到「< 15 秒」
-- ✅ 完全免费（占用 CF Free 配额约 0.3%）
-- ✅ `monitor.py` / `monitor.yml` **零改动**，纯外部触发器
-- ✅ GitHub schedule 保留作为兜底，CF 故障时自动降级
-
-### 怎么用？
-
-1. **创建 GitHub PAT**：fine-grained token，仅勾选目标仓库 + `Actions: Read and write`
-2. **在 Cloudflare Dashboard 部署 Worker**：粘贴 [`cf-worker/worker.js`](./cf-worker/worker.js) → 配置 Secret/Variable → 添加 Cron Trigger `*/5 * * * *`
-3. **验证**：观察 GitHub Actions 列表是否每 5 分钟出现新的 `workflow_dispatch` run
-
-详细分步说明、安全配置、故障排查见 [`cf-worker/README.md`](./cf-worker/README.md)。
-
-### 不想接入也完全没问题
-
-- 业务逻辑（流量监控、自动启停、飞书告警）100% 在 GitHub Actions 内部跑
-- GitHub schedule 即便延迟到 1-4 小时一次，对**24 小时尺度的流量监控**也够用
-- 仅在你对实时性有高要求（如分钟级超额止损）时才需要 CF
