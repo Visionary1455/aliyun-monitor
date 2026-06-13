@@ -353,7 +353,7 @@ def get_cdt_traffic(ak, sk, region):
         resp = client.do_action_with_exception(req)
         data = json.loads(resp.decode('utf-8'))
 
-        logger.info(f"CDT API 返回: {json.dumps(data, ensure_ascii=False)[:200]}")
+        logger.info(f"CDT API 返回: {json.dumps(data, ensure_ascii=False)[:500]}")
 
         # 解析流量数据
         traffic_details = data.get('TrafficDetails', [])
@@ -361,7 +361,14 @@ def get_cdt_traffic(ak, sk, region):
             logger.warning("CDT 流量详情为空，可能没有流量消耗")
             return 0.0
 
-        total_bytes = sum(d.get('Traffic', 0) for d in traffic_details)
+        # 按区域过滤：CDT API 可能返回该账号下所有区域的流量，只取目标区域
+        region_traffic = [d for d in traffic_details if d.get('BusinessRegionId') == region]
+        if region_traffic:
+            total_bytes = sum(d.get('Traffic', 0) for d in region_traffic)
+        else:
+            # 兜底：若 API 未返回 BusinessRegionId 或无匹配，则取所有记录之和
+            total_bytes = sum(d.get('Traffic', 0) for d in traffic_details)
+            logger.warning(f"CDT 流量未找到区域 {region} 的数据，使用总和（可能偏大）")
         return total_bytes / (1024 ** 3)  # 转换为 GB
     except Exception as e:
         logger.error(f"获取CDT流量失败: {e}")
