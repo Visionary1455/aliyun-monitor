@@ -11,10 +11,10 @@ env:
   PYTHON_VERSION: '3.11'
   STATE_FILE: ${{ github.workspace }}/.state/monitor_state.json
 
-environment: ALIYUN_ACCESS_KEY_ID  # 1. 在这里声明要使用的环境
 
 jobs:
   monitor:
+    environment: ALIYUN_ACCESS_KEY_ID  # 1. 在这里声明要使用的环境
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
