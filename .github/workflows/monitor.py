@@ -611,18 +611,56 @@ def main():
     try:
         report_hour = os.environ.get('REPORT_HOUR', '9')
         try:
-            target_hours = [int(h.strip()) for h in report_hour.split(',')]
+            # 解析多个时间点，转为整数列表并排序
+            target_hours = sorted(set(int(h.strip()) for h in report_hour.split(',') if h.strip()))
+            if not target_hours:
+                target_hours = [9]
         except ValueError:
             target_hours = [9]
 
         current_hour = now_local().hour
         today = now_local().strftime('%Y-%m-%d')
-        # 触发条件放宽：当前小时 >= 最早 report_hour 且当天未发，避免 cron 延迟导致漏报
-        min_target_hour = min(target_hours)
-        if current_hour >= min_target_hour and state.get('last_report_date') != today:
-            logger.info(f"发送日报时间到 (current_hour={current_hour}, target>={min_target_hour}), 生成并发送日报...")
+        
+        # 获取已发送的日报记录（支持多时间点）
+        sent_reports = state.get('sent_reports', {})
+        today_key = today  # 使用日期作为key
+        
+        # 检查当前小时是否需要发送日报
+        should_send = False
+        if current_hour in target_hours:
+            # 检查今天这个时间点是否已经发送过
+            sent_hours = sent_reports.get(today_key, [])
+            if current_hour not in sent_hours:
+                should_send = True
+        
+        if should_send:
+            logger.info(f"发送日报时间到 (hour={current_hour}), 生成并发送日报...")
             send_daily_report(instances, results, state)
+            
+            # 记录已发送的时间点
+            if today_key not in sent_reports:
+                sent_reports[today_key] = []
+            if current_hour not in sent_reports[today_key]:
+                sent_reports[today_key].append(current_hour)
+            state['sent_reports'] = sent_reports
             save_state(state)
+        else:
+            # 如果当前小时不在目标列表中，但可能因为cron延迟导致漏报，做兜底检查
+            # 检查是否有目标时间点小于当前小时且未发送（仅当当天还没发送过该时间点）
+            for target_hour in target_hours:
+                if target_hour < current_hour:
+                    sent_hours = sent_reports.get(today_key, [])
+                    if target_hour not in sent_hours:
+                        logger.info(f"补发日报: 目标时间 {target_hour}:00 未发送，当前小时 {current_hour}，补发...")
+                        send_daily_report(instances, results, state)
+                        if today_key not in sent_reports:
+                            sent_reports[today_key] = []
+                        if target_hour not in sent_reports[today_key]:
+                            sent_reports[today_key].append(target_hour)
+                        state['sent_reports'] = sent_reports
+                        save_state(state)
+                        break  # 只补发一个漏报的时间点
+            
     except Exception as e:
         logger.exception(f"日报发送失败: {e}")
 
