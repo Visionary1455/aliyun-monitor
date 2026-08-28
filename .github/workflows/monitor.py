@@ -644,22 +644,6 @@ def main():
                 sent_reports[today_key].append(current_hour)
             state['sent_reports'] = sent_reports
             save_state(state)
-        else:
-            # 如果当前小时不在目标列表中，但可能因为cron延迟导致漏报，做兜底检查
-            # 检查是否有目标时间点小于当前小时且未发送（仅当当天还没发送过该时间点）
-            for target_hour in target_hours:
-                if target_hour < current_hour:
-                    sent_hours = sent_reports.get(today_key, [])
-                    if target_hour not in sent_hours:
-                        logger.info(f"补发日报: 目标时间 {target_hour}:00 未发送，当前小时 {current_hour}，补发...")
-                        send_daily_report(instances, results, state)
-                        if today_key not in sent_reports:
-                            sent_reports[today_key] = []
-                        if target_hour not in sent_reports[today_key]:
-                            sent_reports[today_key].append(target_hour)
-                        state['sent_reports'] = sent_reports
-                        save_state(state)
-                        break  # 只补发一个漏报的时间点
             
     except Exception as e:
         logger.exception(f"日报发送失败: {e}")
